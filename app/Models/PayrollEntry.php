@@ -44,7 +44,7 @@ class PayrollEntry extends Model
         'net_pay' => 'decimal:2',
         'ytd_earnings' => 'decimal:2',
         'thirteenth_month_pay' => 'decimal:2',
-        'daily_rates' => 'array',
+        'daily_rates' => 'decimal:2',
     ];
 
     /**

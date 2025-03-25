@@ -3,116 +3,230 @@
 import type React from "react"
 
 import { useState } from "react"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
+import { Label } from "@/components/ui/label"
+import { Input } from "@/components/ui/input"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Calendar, Upload, Users } from "lucide-react"
+
+interface Employee {
+  id: number
+  employee_number: string
+  full_name: string
+}
 
 interface BulkAddAttendanceModalProps {
   onClose: () => void
   onSubmitFile: (file: File) => void
-  onSubmitManual: (date: string, employeeNumbers: string[]) => void
+  onSubmitManual: (date: string, employeeNumbers: string[], status: string) => void
+  employees?: Employee[]
 }
 
-const BulkAddAttendanceModal = ({ onClose, onSubmitFile, onSubmitManual }: BulkAddAttendanceModalProps) => {
-  const [selectedOption, setSelectedOption] = useState<"file" | "manual">("file")
+const BulkAddAttendanceModal = ({
+  onClose,
+  onSubmitFile,
+  onSubmitManual,
+  employees = [],
+}: BulkAddAttendanceModalProps) => {
+  const [activeTab, setActiveTab] = useState("file")
   const [file, setFile] = useState<File | null>(null)
-  const [employeeNumbers, setEmployeeNumbers] = useState<string>("")
-  const [attendanceDate, setAttendanceDate] = useState<string>("")
+  const [date, setDate] = useState<string>(new Date().toISOString().split("T")[0])
+  const [status, setStatus] = useState<string>("Present")
+  const [selectedEmployees, setSelectedEmployees] = useState<string[]>([])
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [selectAll, setSelectAll] = useState(false)
 
   // Handle file selection
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      const selectedFile = e.target.files[0]
-      if (selectedFile) {
-        setFile(selectedFile) // Store selected file
-      }
+    if (e.target.files && e.target.files[0]) {
+      setFile(e.target.files[0])
     }
   }
 
-  // Handle form submission based on selected option
-  const handleSubmit = () => {
-    if (selectedOption === "file" && file) {
-      onSubmitFile(file) // Submit the file if option is "file"
-    } else if (selectedOption === "manual" && employeeNumbers && attendanceDate) {
-      const employeeNumbersArray = employeeNumbers.split(",").map((num) => num.trim())
-      onSubmitManual(attendanceDate, employeeNumbersArray) // Submit manually entered data if option is "manual"
+  // Handle file upload submission
+  const handleFileSubmit = () => {
+    if (!file) return
+    setIsSubmitting(true)
+    try {
+      onSubmitFile(file)
+    } catch (error) {
+      console.error("Error uploading file:", error)
+    } finally {
+      setIsSubmitting(false)
     }
+  }
+
+  // Handle manual submission
+  const handleManualSubmit = () => {
+    if (!date || selectedEmployees.length === 0) return
+    setIsSubmitting(true)
+    try {
+      onSubmitManual(date, selectedEmployees, status)
+    } catch (error) {
+      console.error("Error adding bulk attendance:", error)
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  // Set today's date
+  const setToday = () => {
+    setDate(new Date().toISOString().split("T")[0])
+  }
+
+  // Toggle employee selection
+  const toggleEmployee = (employeeNumber: string) => {
+    if (selectedEmployees.includes(employeeNumber)) {
+      setSelectedEmployees(selectedEmployees.filter((e) => e !== employeeNumber))
+    } else {
+      setSelectedEmployees([...selectedEmployees, employeeNumber])
+    }
+  }
+
+  // Toggle select all employees
+  const toggleSelectAll = () => {
+    if (selectAll) {
+      setSelectedEmployees([])
+    } else {
+      setSelectedEmployees(employees.map((e) => e.employee_number))
+    }
+    setSelectAll(!selectAll)
   }
 
   return (
-    <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex justify-center items-center dark:text-black">
-      <div className="bg-white p-6 rounded-md shadow-md max-w-md w-full">
-        <h3 className="text-xl font-semibold mb-4">Bulk Add Attendance</h3>
+    <Dialog open={true} onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="text-xl font-semibold">Bulk Add Attendance</DialogTitle>
+          <DialogDescription>
+            Add multiple attendance records at once by uploading a file or selecting employees manually.
+          </DialogDescription>
+        </DialogHeader>
 
-        {/* Option Selection */}
-        <div className="mb-4">
-          <label>
-            <input
-              type="radio"
-              checked={selectedOption === "file"}
-              onChange={() => setSelectedOption("file")}
-              className="mr-2"
-            />
-            Add by File
-          </label>
-          <br />
-          <label>
-            <input
-              type="radio"
-              checked={selectedOption === "manual"}
-              onChange={() => setSelectedOption("manual")}
-              className="mr-2"
-            />
-            Add Manually
-          </label>
-        </div>
+        <Tabs defaultValue="file" value={activeTab} onValueChange={setActiveTab}>
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="file">File Upload</TabsTrigger>
+            <TabsTrigger value="manual">Manual Selection</TabsTrigger>
+          </TabsList>
 
-        {/* File Upload Option */}
-        {selectedOption === "file" && (
-          <div className="mb-4">
-            <input
-              type="file"
-              accept=".csv"
-              className="border p-2 w-full"
-              onChange={handleFileChange} // Handle file change
-            />
-          </div>
-        )}
+          <TabsContent value="file" className="space-y-4 pt-4">
+            <div className="space-y-2">
+              <Label htmlFor="file">Upload CSV or Excel File</Label>
+              <div className="border-2 border-dashed rounded-lg p-6 text-center">
+                <Upload className="h-8 w-8 mx-auto mb-2 text-slate-400" />
+                <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">
+                  Drag and drop your file here or click to browse
+                </p>
+                <Input id="file" type="file" accept=".csv,.xlsx,.xls" onChange={handleFileChange} className="hidden" />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => document.getElementById("file")?.click()}
+                  className="mt-2"
+                >
+                  Browse Files
+                </Button>
+                {file && <p className="mt-2 text-sm text-green-600 dark:text-green-400">Selected: {file.name}</p>}
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                File should contain columns: employee_number, work_date, status, daily_rate, adjustment
+              </p>
+            </div>
 
-        {/* Manual Add Option */}
-        {selectedOption === "manual" && (
-          <div className="space-y-4">
-            <div>
-              <label className="block mb-2">Date of Attendance</label>
-              <input
+            <div className="flex justify-end space-x-2 pt-4">
+              <Button variant="outline" onClick={onClose} type="button">
+                Cancel
+              </Button>
+              <Button type="button" onClick={handleFileSubmit} disabled={!file || isSubmitting}>
+                {isSubmitting ? "Uploading..." : "Upload"}
+              </Button>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="manual" className="space-y-4 pt-4">
+            <div className="space-y-2">
+              <div className="flex justify-between items-center">
+                <Label htmlFor="manual-date">Date</Label>
+                <Button type="button" variant="outline" size="sm" onClick={setToday} className="text-xs h-7">
+                  <Calendar className="h-3 w-3 mr-1" />
+                  Today
+                </Button>
+              </div>
+              <Input
+                id="manual-date"
                 type="date"
-                className="p-2 border w-full"
-                value={attendanceDate}
-                onChange={(e) => setAttendanceDate(e.target.value)} // Handle date input change
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+                className="w-full"
+                required
               />
             </div>
-            <div>
-              <label className="block mb-2">Employee Numbers (comma-separated)</label>
-              <input
-                type="text"
-                className="p-2 border w-full"
-                placeholder="e.g. 12345, 67890"
-                value={employeeNumbers}
-                onChange={(e) => setEmployeeNumbers(e.target.value)} // Handle employee number input change
-              />
-            </div>
-          </div>
-        )}
 
-        {/* Buttons */}
-        <div className="flex space-x-4 mt-6">
-          <Button variant="outline" onClick={onClose} className="dark:text-white">
-            Cancel
-          </Button>
-          <Button variant="default" onClick={handleSubmit}>
-            Submit
-          </Button>
-        </div>
-      </div>
-    </div>
+            <div className="space-y-2">
+              <Label htmlFor="status">Status</Label>
+              <Select defaultValue={status} onValueChange={setStatus}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Present">Present</SelectItem>
+                  <SelectItem value="Absent">Absent</SelectItem>
+                  <SelectItem value="Day Off">Day Off</SelectItem>
+                  <SelectItem value="Holiday">Holiday</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex justify-between items-center">
+                <Label>Select Employees</Label>
+                <Button type="button" variant="outline" size="sm" onClick={toggleSelectAll} className="text-xs h-7">
+                  <Users className="h-3 w-3 mr-1" />
+                  {selectAll ? "Deselect All" : "Select All"}
+                </Button>
+              </div>
+              <div className="border rounded-md p-2 max-h-40 overflow-y-auto">
+                {employees.length > 0 ? (
+                  employees.map((employee) => (
+                    <div key={employee.id} className="flex items-center space-x-2 py-1">
+                      <Checkbox
+                        id={`employee-${employee.id}`}
+                        checked={selectedEmployees.includes(employee.employee_number)}
+                        onCheckedChange={() => toggleEmployee(employee.employee_number)}
+                      />
+                      <Label htmlFor={`employee-${employee.id}`} className="text-sm cursor-pointer flex-1">
+                        {employee.full_name} ({employee.employee_number})
+                      </Label>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-sm text-slate-500 dark:text-slate-400 py-2 text-center">No employees found</p>
+                )}
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Selected: {selectedEmployees.length} employees
+              </p>
+            </div>
+
+            <div className="flex justify-end space-x-2 pt-4">
+              <Button variant="outline" onClick={onClose} type="button">
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                onClick={handleManualSubmit}
+                disabled={selectedEmployees.length === 0 || !date || isSubmitting}
+              >
+                {isSubmitting ? "Adding..." : "Add Records"}
+              </Button>
+            </div>
+          </TabsContent>
+        </Tabs>
+      </DialogContent>
+    </Dialog>
   )
 }
 

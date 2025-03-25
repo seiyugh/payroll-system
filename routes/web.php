@@ -69,6 +69,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::post('/generate', [PayrollAutomationController::class, 'generatePayrolls'])->name('payroll.automation.generate');
             Route::post('/send-emails', [PayrollAutomationController::class, 'sendPayslipEmails'])->name('payroll.automation.send-emails');
         });
+
+        // Generate payroll from attendance
+        Route::post('/generate-from-attendance', [PayrollController::class, 'generateFromAttendance'])->name('payroll.generate-from-attendance');
     });
 
     // Attendance Routes
@@ -80,6 +83,11 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::get('/{id}/edit', [AttendanceController::class, 'edit'])->name('attendance.edit');
         Route::put('/{id}', [AttendanceController::class, 'update'])->name('attendance.update');
         Route::delete('/{id}', [AttendanceController::class, 'destroy'])->name('attendance.destroy');
+        
+        // Additional routes for bulk operations and export
+        Route::post('/bulk', [AttendanceController::class, 'bulkStore'])->name('attendance.bulk.store');
+        Route::post('/bulk-upload', [AttendanceController::class, 'bulkUpload'])->name('attendance.bulk.upload');
+        Route::get('/export', [AttendanceController::class, 'export'])->name('attendance.export');
     });
 });
 

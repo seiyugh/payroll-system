@@ -1,12 +1,25 @@
 "use client"
 
-import { useState } from "react"
-import { Head } from "@inertiajs/react"
+import React from "react"
+
+import { useState, useEffect } from "react"
+import { Head, router } from "@inertiajs/react"
 import AppLayout from "@/layouts/app-layout"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Clock, Settings, AlertCircle, CheckCircle, Play, Info, Download } from "lucide-react"
+import {
+  Clock,
+  Settings,
+  AlertCircle,
+  CheckCircle,
+  Play,
+  Info,
+  Download,
+  Calendar,
+  BarChart3,
+  FileText,
+} from "lucide-react"
 import { toast } from "sonner"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
@@ -20,17 +33,108 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Progress } from "@/components/ui/progress"
 
 // Import the export utility
 import { exportToCSV } from "@/utils/export-utils"
 
-interface PayrollAutomationProps {
-  periods: any[]
-  employees: any[]
+interface PayrollPeriod {
+  id: number
+  period_start: string
+  period_end: string
+  payment_date: string
+  status: string
 }
 
-const PayrollAutomation = ({ periods = [], employees = [] }: PayrollAutomationProps) => {
-  const [activeTab, setActiveTab] = useState<string>("settings")
+interface Employee {
+  id: number
+  employee_number: string
+  full_name: string
+  email: string
+}
+
+interface AutomationHistory {
+  id?: number
+  date: string
+  action: string
+  period: string
+  status: string
+  details: string
+}
+
+interface PayrollAutomationProps {
+  periods?: PayrollPeriod[]
+  employees?: Employee[]
+  automationHistory?: AutomationHistory[]
+}
+
+// Simple chart component using canvas
+const SimpleChart = ({ data, labels, color = "#4f46e5" }) => {
+  const canvasRef = React.useRef(null)
+
+  React.useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    const ctx = canvas.getContext("2d")
+    const width = canvas.width
+    const height = canvas.height
+    const maxValue = Math.max(...data, 1) // Ensure we don't divide by zero
+    const padding = 20
+
+    // Clear canvas
+    ctx.clearRect(0, 0, width, height)
+
+    // Draw chart
+    ctx.beginPath()
+    ctx.moveTo(padding, height - padding - (data[0] / maxValue) * (height - 2 * padding))
+
+    for (let i = 1; i < data.length; i++) {
+      const x = padding + (i / (data.length - 1)) * (width - 2 * padding)
+      const y = height - padding - (data[i] / maxValue) * (height - 2 * padding)
+      ctx.lineTo(x, y)
+    }
+
+    ctx.strokeStyle = color
+    ctx.lineWidth = 2
+    ctx.stroke()
+
+    // Fill area under the line
+    ctx.lineTo(width - padding, height - padding)
+    ctx.lineTo(padding, height - padding)
+    ctx.closePath()
+    ctx.fillStyle = `${color}20`
+    ctx.fill()
+
+    // Draw dots at data points
+    for (let i = 0; i < data.length; i++) {
+      const x = padding + (i / (data.length - 1)) * (width - 2 * padding)
+      const y = height - padding - (data[i] / maxValue) * (height - 2 * padding)
+
+      ctx.beginPath()
+      ctx.arc(x, y, 4, 0, 2 * Math.PI)
+      ctx.fillStyle = color
+      ctx.fill()
+    }
+
+    // Add labels if provided
+    if (labels && labels.length === data.length) {
+      ctx.textAlign = "center"
+      ctx.fillStyle = "#6b7280"
+      ctx.font = "10px sans-serif"
+
+      for (let i = 0; i < labels.length; i++) {
+        const x = padding + (i / (labels.length - 1)) * (width - 2 * padding)
+        ctx.fillText(labels[i], x, height - 5)
+      }
+    }
+  }, [data, labels, color])
+
+  return <canvas ref={canvasRef} width={300} height={150} className="w-full h-auto" />
+}
+
+const PayrollAutomation = ({ periods = [], employees = [], automationHistory = [] }: PayrollAutomationProps) => {
+  const [activeTab, setActiveTab] = useState<string>("dashboard")
   const [isLoading, setIsLoading] = useState(false)
   const [selectedPeriod, setSelectedPeriod] = useState<string>("")
   const [sendEmail, setSendEmail] = useState(true)
@@ -45,6 +149,42 @@ const PayrollAutomation = ({ periods = [], employees = [] }: PayrollAutomationPr
   const [autoEmail, setAutoEmail] = useState(true)
   const [emailDay, setEmailDay] = useState("thursday")
   const [emailTime, setEmailTime] = useState("09:00")
+  const [weeklySchedule, setWeeklySchedule] = useState(true)
+  const [payoutDelay, setPayoutDelay] = useState(4)
+
+  // History data
+  const [historyData, setHistoryData] = useState<AutomationHistory[]>([])
+
+  // Sample data for charts
+  const attendanceData = [92, 95, 90, 94, 91, 93, 96]
+  const attendanceLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+  const payrollTrends = [45000, 46500, 44800, 47200, 48500, 49000, 50200]
+  const payrollLabels = ["Week 1", "Week 2", "Week 3", "Week 4", "Week 5", "Week 6", "Week 7"]
+
+  // Load history data
+  useEffect(() => {
+    if (automationHistory && automationHistory.length > 0) {
+      setHistoryData(automationHistory)
+    } else {
+      // Fallback to sample data if no history is provided
+      setHistoryData([
+        {
+          date: new Date().toLocaleDateString(),
+          action: "Generate Payrolls",
+          period: "Current Period",
+          status: "Success",
+          details: "Generated payroll entries successfully",
+        },
+        {
+          date: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toLocaleDateString(),
+          action: "Send Emails",
+          period: "Previous Period",
+          status: "Partial",
+          details: "Sent 48 emails, 2 failed",
+        },
+      ])
+    }
+  }, [automationHistory])
 
   // Select/deselect all employees
   const toggleAllEmployees = (checked: boolean) => {
@@ -65,7 +205,7 @@ const PayrollAutomation = ({ periods = [], employees = [] }: PayrollAutomationPr
   }
 
   // Generate payrolls for selected period
-  const handleGeneratePayrolls = async () => {
+  const handleGeneratePayrolls = () => {
     if (!selectedPeriod) {
       toast.error("Please select a payroll period")
       return
@@ -74,42 +214,40 @@ const PayrollAutomation = ({ periods = [], employees = [] }: PayrollAutomationPr
     setIsGenerating(true)
     setLogOutput("")
 
-    try {
-      const response = await fetch("/payroll/automation/generate", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-CSRF-TOKEN": document.querySelector('meta[name="csrf-token"]')?.getAttribute("content"),
+    router.post(
+      "/payroll/automation/generate",
+      {
+        period_id: selectedPeriod,
+        send_email: sendEmail,
+      },
+      {
+        onSuccess: (page) => {
+          const { success, message, details } = page.props.flash || {}
+
+          if (success) {
+            toast.success(message || "Payrolls generated successfully!")
+            setLogOutput(details || "Payrolls generated successfully!")
+          } else {
+            toast.error(message || "Failed to generate payrolls")
+            setLogOutput(details || "Error occurred during payroll generation.")
+          }
+
+          setShowLogDialog(true)
+          setIsGenerating(false)
         },
-        body: JSON.stringify({
-          period_id: selectedPeriod,
-          send_email: sendEmail,
-        }),
-      })
-
-      const data = await response.json()
-
-      if (data.success) {
-        toast.success(data.message)
-        setLogOutput(data.details || "Payrolls generated successfully!")
-        setShowLogDialog(true)
-      } else {
-        toast.error(data.message || "Failed to generate payrolls")
-        setLogOutput(data.details || "Error occurred during payroll generation.")
-        setShowLogDialog(true)
-      }
-    } catch (error) {
-      console.error("Error generating payrolls:", error)
-      toast.error("An error occurred while generating payrolls")
-      setLogOutput("Error: " + (error.message || "Unknown error occurred"))
-      setShowLogDialog(true)
-    } finally {
-      setIsGenerating(false)
-    }
+        onError: (errors) => {
+          console.error("Error generating payrolls:", errors)
+          toast.error("An error occurred while generating payrolls")
+          setLogOutput("Error: " + JSON.stringify(errors))
+          setShowLogDialog(true)
+          setIsGenerating(false)
+        },
+      },
+    )
   }
 
   // Send payslip emails
-  const handleSendEmails = async () => {
+  const handleSendEmails = () => {
     if (!selectedPeriod) {
       toast.error("Please select a payroll period")
       return
@@ -122,81 +260,95 @@ const PayrollAutomation = ({ periods = [], employees = [] }: PayrollAutomationPr
 
     setIsSendingEmails(true)
 
-    try {
-      const response = await fetch("/payroll/automation/send-emails", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-CSRF-TOKEN": document.querySelector('meta[name="csrf-token"]')?.getAttribute("content"),
+    router.post(
+      "/payroll/automation/send-emails",
+      {
+        period_id: selectedPeriod,
+        employee_ids: selectedEmployees,
+      },
+      {
+        onSuccess: (page) => {
+          const { success, message } = page.props.flash || {}
+
+          if (success) {
+            toast.success(message || "Payslip emails sent successfully!")
+          } else {
+            toast.error(message || "Failed to send payslip emails")
+          }
+
+          setIsSendingEmails(false)
         },
-        body: JSON.stringify({
-          period_id: selectedPeriod,
-          employee_ids: selectedEmployees,
-        }),
-      })
-
-      const data = await response.json()
-
-      if (data.success) {
-        toast.success(data.message)
-      } else {
-        toast.error(data.message || "Failed to send payslip emails")
-      }
-    } catch (error) {
-      console.error("Error sending payslip emails:", error)
-      toast.error("An error occurred while sending payslip emails")
-    } finally {
-      setIsSendingEmails(false)
-    }
+        onError: (errors) => {
+          console.error("Error sending payslip emails:", errors)
+          toast.error("An error occurred while sending payslip emails")
+          setIsSendingEmails(false)
+        },
+      },
+    )
   }
 
   // Save automation settings
   const handleSaveSettings = () => {
-    toast.success("Automation settings saved successfully")
+    router.post(
+      "/payroll/automation/settings",
+      {
+        auto_generate: autoGenerate,
+        auto_email: autoEmail,
+        email_day: emailDay,
+        email_time: emailTime,
+        weekly_schedule: weeklySchedule,
+        payout_delay: payoutDelay,
+      },
+      {
+        onSuccess: () => {
+          toast.success("Automation settings saved successfully")
+        },
+        onError: () => {
+          toast.error("Failed to save automation settings")
+        },
+      },
+    )
   }
 
-  // Add this function to the component
+  // Export automation history
   const exportAutomationHistory = () => {
     toast.success("Exporting automation history...")
 
     try {
-      // Sample automation history data for export
-      const exportData = [
-        {
-          Date: new Date().toLocaleDateString(),
-          Action: "Generate Payrolls",
-          Period: "Mar 18 - Mar 24, 2025",
-          Status: "Success",
-          Details: "Generated 50 payroll entries",
-        },
-        {
-          Date: new Date().toLocaleDateString(),
-          Action: "Send Emails",
-          Period: "Mar 18 - Mar 24, 2025",
-          Status: "Success",
-          Details: "Sent 48 emails, 2 failed",
-        },
-        {
-          Date: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toLocaleDateString(),
-          Action: "Generate Payrolls",
-          Period: "Mar 11 - Mar 17, 2025",
-          Status: "Failed",
-          Details: "Database connection error",
-        },
-      ]
-
       // Generate filename with date
       const date = new Date().toISOString().split("T")[0]
       const filename = `payroll_automation_history_${date}.csv`
 
       // Export to CSV
-      exportToCSV(exportData, filename)
+      exportToCSV(historyData, filename)
 
       toast.success("Export completed successfully!")
     } catch (error) {
       console.error("Export error:", error)
       toast.error("Failed to export data. Please try again.")
     }
+  }
+
+  // Calculate next payout date
+  const calculateNextPayoutDate = () => {
+    const today = new Date()
+    const dayOfWeek = today.getDay() // 0 = Sunday, 1 = Monday, etc.
+
+    // Find the next Sunday
+    const daysUntilSunday = dayOfWeek === 0 ? 0 : 7 - dayOfWeek
+    const nextSunday = new Date(today)
+    nextSunday.setDate(today.getDate() + daysUntilSunday)
+
+    // Add payout delay (default 4 days for Thursday)
+    const payoutDate = new Date(nextSunday)
+    payoutDate.setDate(nextSunday.getDate() + payoutDelay)
+
+    return payoutDate.toLocaleDateString("en-US", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    })
   }
 
   return (
@@ -215,14 +367,18 @@ const PayrollAutomation = ({ periods = [], employees = [] }: PayrollAutomationPr
           <div>
             <h1 className="text-2xl font-bold mb-1">Payroll Automation</h1>
             <p className="text-slate-600 dark:text-slate-400">
-              Configure automatic payroll generation and email delivery
+              Configure automatic payroll generation and email delivery based on attendance
             </p>
           </div>
         </div>
 
         {/* Tabs Navigation */}
-        <Tabs defaultValue="settings" className="mb-6" value={activeTab} onValueChange={setActiveTab}>
+        <Tabs defaultValue="dashboard" className="mb-6" value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="mb-4">
+            <TabsTrigger value="dashboard">
+              <BarChart3 className="h-4 w-4 mr-2" />
+              Dashboard
+            </TabsTrigger>
             <TabsTrigger value="settings">
               <Settings className="h-4 w-4 mr-2" />
               Settings
@@ -237,6 +393,161 @@ const PayrollAutomation = ({ periods = [], employees = [] }: PayrollAutomationPr
             </TabsTrigger>
           </TabsList>
 
+          {/* Dashboard Tab */}
+          <TabsContent value="dashboard" className="mt-0">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Status Card */}
+              <Card className="p-6 border border-slate-200 dark:border-slate-700 md:col-span-3">
+                <h2 className="text-xl font-semibold mb-4">Automation Status</h2>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg border border-green-200 dark:border-green-800">
+                    <div className="flex items-center">
+                      <CheckCircle className="h-5 w-5 text-green-500 mr-2" />
+                      <h3 className="font-medium">Payroll Automation</h3>
+                    </div>
+                    <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+                      {autoGenerate ? "Enabled" : "Disabled"} - Payrolls will be{" "}
+                      {autoGenerate ? "automatically" : "manually"} generated based on attendance
+                    </p>
+                    <div className="mt-3">
+                      <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Schedule:</span>
+                      <p className="text-sm font-medium">Weekly (Monday-Sunday)</p>
+                    </div>
+                  </div>
+
+                  <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-lg border border-blue-200 dark:border-blue-800">
+                    <div className="flex items-center">
+                      <Calendar className="h-5 w-5 text-blue-500 mr-2" />
+                      <h3 className="font-medium">Next Payout Date</h3>
+                    </div>
+                    <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+                      Payouts are processed {payoutDelay} days after the end of each week
+                    </p>
+                    <p className="mt-3 text-sm font-medium text-blue-600 dark:text-blue-400">
+                      {calculateNextPayoutDate()}
+                    </p>
+                  </div>
+
+                  <div className="bg-amber-50 dark:bg-amber-900/20 p-4 rounded-lg border border-amber-200 dark:border-amber-800">
+                    <div className="flex items-center">
+                      <FileText className="h-5 w-5 text-amber-500 mr-2" />
+                      <h3 className="font-medium">Email Notifications</h3>
+                    </div>
+                    <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+                      {autoEmail ? "Enabled" : "Disabled"} - Payslips will be {autoEmail ? "automatically" : "manually"}{" "}
+                      emailed to employees
+                    </p>
+                    <div className="mt-3">
+                      <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Schedule:</span>
+                      <p className="text-sm font-medium">
+                        Every {emailDay.charAt(0).toUpperCase() + emailDay.slice(1)} at {emailTime}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </Card>
+
+              {/* Attendance Trends */}
+              <Card className="p-6 border border-slate-200 dark:border-slate-700">
+                <h2 className="text-lg font-semibold mb-4">Weekly Attendance Trends</h2>
+                <div className="mt-2">
+                  <SimpleChart data={attendanceData} labels={attendanceLabels} color="#22c55e" />
+                </div>
+                <div className="mt-4">
+                  <div className="flex justify-between mb-1">
+                    <span className="text-sm text-slate-500 dark:text-slate-400">Average Attendance Rate</span>
+                    <span className="text-sm font-medium">93%</span>
+                  </div>
+                  <Progress
+                    value={93}
+                    className="h-2 bg-slate-100 dark:bg-slate-700"
+                    indicatorClassName="bg-green-500"
+                  />
+                </div>
+                <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+                  <div>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">Present</p>
+                    <p className="font-medium">92%</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">Absent</p>
+                    <p className="font-medium">5%</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">Day Off</p>
+                    <p className="font-medium">3%</p>
+                  </div>
+                </div>
+              </Card>
+
+              {/* Payroll Trends */}
+              <Card className="p-6 border border-slate-200 dark:border-slate-700">
+                <h2 className="text-lg font-semibold mb-4">Weekly Payroll Trends</h2>
+                <div className="mt-2">
+                  <SimpleChart data={payrollTrends} labels={payrollLabels} color="#4f46e5" />
+                </div>
+                <div className="mt-4">
+                  <div className="flex justify-between mb-1">
+                    <span className="text-sm text-slate-500 dark:text-slate-400">Average Weekly Payroll</span>
+                    <span className="text-sm font-medium">₱47,314.29</span>
+                  </div>
+                  <Progress
+                    value={80}
+                    className="h-2 bg-slate-100 dark:bg-slate-700"
+                    indicatorClassName="bg-indigo-500"
+                  />
+                </div>
+                <div className="mt-4 grid grid-cols-2 gap-2">
+                  <div className="bg-slate-50 dark:bg-slate-800 p-2 rounded">
+                    <p className="text-xs text-slate-500 dark:text-slate-400">This Week</p>
+                    <p className="font-medium">₱50,200.00</p>
+                  </div>
+                  <div className="bg-slate-50 dark:bg-slate-800 p-2 rounded">
+                    <p className="text-xs text-slate-500 dark:text-slate-400">Last Week</p>
+                    <p className="font-medium">₱49,000.00</p>
+                  </div>
+                </div>
+              </Card>
+
+              {/* Recent Activity */}
+              <Card className="p-6 border border-slate-200 dark:border-slate-700">
+                <h2 className="text-lg font-semibold mb-4">Recent Activity</h2>
+                <div className="space-y-4">
+                  {historyData.slice(0, 5).map((item, index) => (
+                    <div key={index} className="flex items-start">
+                      <div
+                        className={`p-2 rounded-full mr-3 ${
+                          item.status === "Success"
+                            ? "bg-green-100 text-green-500 dark:bg-green-900/20"
+                            : "bg-amber-100 text-amber-500 dark:bg-amber-900/20"
+                        }`}
+                      >
+                        {item.status === "Success" ? (
+                          <CheckCircle className="h-4 w-4" />
+                        ) : (
+                          <AlertCircle className="h-4 w-4" />
+                        )}
+                      </div>
+                      <div>
+                        <p className="font-medium text-sm">{item.action}</p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">
+                          {item.date} - {item.period}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <Button
+                  variant="outline"
+                  className="w-full mt-4 text-slate-600 border-slate-200 hover:border-slate-300 dark:text-slate-400 dark:border-slate-700 dark:hover:border-slate-600"
+                  onClick={() => setActiveTab("history")}
+                >
+                  View All Activity
+                </Button>
+              </Card>
+            </div>
+          </TabsContent>
+
           {/* Settings Tab */}
           <TabsContent value="settings" className="mt-0">
             <Card className="p-6 border border-slate-200 dark:border-slate-700">
@@ -246,7 +557,7 @@ const PayrollAutomation = ({ periods = [], employees = [] }: PayrollAutomationPr
                 <Info className="h-4 w-4" />
                 <AlertTitle>Information</AlertTitle>
                 <AlertDescription>
-                  Configure how payrolls are automatically generated and delivered to employees.
+                  Configure how payrolls are automatically generated based on attendance and delivered to employees.
                 </AlertDescription>
               </Alert>
 
@@ -255,11 +566,44 @@ const PayrollAutomation = ({ periods = [], employees = [] }: PayrollAutomationPr
                   <div>
                     <h3 className="text-lg font-medium">Automatic Payroll Generation</h3>
                     <p className="text-sm text-slate-500 dark:text-slate-400">
-                      Automatically generate payrolls at the end of each pay period
+                      Automatically generate payrolls at the end of each pay period based on attendance
                     </p>
                   </div>
                   <Switch checked={autoGenerate} onCheckedChange={setAutoGenerate} />
                 </div>
+
+                {autoGenerate && (
+                  <div className="pl-6 border-l-2 border-slate-200 dark:border-slate-700 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h4 className="text-md font-medium">Weekly Schedule (Monday-Sunday)</h4>
+                        <p className="text-sm text-slate-500 dark:text-slate-400">
+                          Generate payrolls based on weekly attendance from Monday to Sunday
+                        </p>
+                      </div>
+                      <Switch checked={weeklySchedule} onCheckedChange={setWeeklySchedule} />
+                    </div>
+
+                    <div>
+                      <Label htmlFor="payoutDelay">Payout Delay (days after Sunday)</Label>
+                      <select
+                        id="payoutDelay"
+                        className="mt-1 block w-full p-2 border rounded bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700"
+                        value={payoutDelay}
+                        onChange={(e) => setPayoutDelay(Number.parseInt(e.target.value))}
+                      >
+                        <option value="1">1 day (Monday)</option>
+                        <option value="2">2 days (Tuesday)</option>
+                        <option value="3">3 days (Wednesday)</option>
+                        <option value="4">4 days (Thursday)</option>
+                        <option value="5">5 days (Friday)</option>
+                      </select>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                        Payouts will be processed this many days after the end of each week
+                      </p>
+                    </div>
+                  </div>
+                )}
 
                 <div className="flex items-center justify-between">
                   <div>
@@ -450,38 +794,39 @@ const PayrollAutomation = ({ periods = [], employees = [] }: PayrollAutomationPr
                       </tr>
                     </thead>
                     <tbody className="bg-white dark:bg-slate-900 divide-y divide-slate-200 dark:divide-slate-700">
-                      <tr>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm">{new Date().toLocaleDateString()}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm">Generate Payrolls</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm">Mar 18 - Mar 24, 2025</td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400">
-                            <CheckCircle className="h-4 w-4 mr-1" /> Success
-                          </span>
-                        </td>
-                      </tr>
-                      <tr>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm">{new Date().toLocaleDateString()}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm">Send Emails</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm">Mar 18 - Mar 24, 2025</td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400">
-                            <CheckCircle className="h-4 w-4 mr-1" /> Success
-                          </span>
-                        </td>
-                      </tr>
-                      <tr>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm">
-                          {new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toLocaleDateString()}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm">Generate Payrolls</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm">Mar 11 - Mar 17, 2025</td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-400">
-                            <AlertCircle className="h-4 w-4 mr-1" /> Failed
-                          </span>
-                        </td>
-                      </tr>
+                      {historyData.length > 0 ? (
+                        historyData.map((item, index) => (
+                          <tr key={item.id || index}>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm">{item.date}</td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm">{item.action}</td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm">{item.period}</td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <span
+                                className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                                  item.status === "Success"
+                                    ? "bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400"
+                                    : item.status === "Partial"
+                                      ? "bg-amber-100 text-amber-800 dark:bg-amber-900/20 dark:text-amber-400"
+                                      : "bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-400"
+                                }`}
+                              >
+                                {item.status === "Success" ? (
+                                  <CheckCircle className="h-4 w-4 mr-1" />
+                                ) : (
+                                  <AlertCircle className="h-4 w-4 mr-1" />
+                                )}{" "}
+                                {item.status}
+                              </span>
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={4} className="px-6 py-4 text-center text-sm text-slate-500">
+                            No automation history found
+                          </td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 </div>

@@ -83,6 +83,13 @@ const PayrollIndex = ({ payrolls = [], payrollPeriods = [], employees = [] }: Pa
   const [currentPage, setCurrentPage] = useState(1)
   const [itemsPerPage, setItemsPerPage] = useState(10)
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const [isNewPeriodModalOpen, setIsNewPeriodModalOpen] = useState(false)
+  const [newPeriodData, setNewPeriodData] = useState({
+    period_start: "",
+    period_end: "",
+    payment_date: "",
+    status: "Open",
+  })
 
   const { route } = usePage().props
 
@@ -108,6 +115,26 @@ const PayrollIndex = ({ payrolls = [], payrollPeriods = [], employees = [] }: Pa
   const closeUpdateModal = () => {
     setSelectedPayroll(null)
     setIsUpdateModalOpen(false)
+  }
+
+  // Calculate period end and payment date based on start date
+  const handlePeriodStartChange = (e) => {
+    const startDate = new Date(e.target.value)
+
+    // Calculate end date (7 days after start date)
+    const endDate = new Date(startDate)
+    endDate.setDate(startDate.getDate() + 6)
+
+    // Calculate payment date (4 days after end date)
+    const paymentDate = new Date(endDate)
+    paymentDate.setDate(endDate.getDate() + 4)
+
+    setNewPeriodData({
+      ...newPeriodData,
+      period_start: e.target.value,
+      period_end: endDate.toISOString().split("T")[0],
+      payment_date: paymentDate.toISOString().split("T")[0],
+    })
   }
 
   const handleAddPayroll = (data: Payroll) => {
@@ -234,7 +261,20 @@ const PayrollIndex = ({ payrolls = [], payrollPeriods = [], employees = [] }: Pa
 
   // Send email
   const sendEmail = (payroll: Payroll) => {
-    toast.success(`Payslip email sent to employee: ${payroll.full_name}`)
+    router.post(
+      `/payroll/${payroll.id}/send-email`,
+      {},
+      {
+        onSuccess: () => {
+          toast.success(`Payslip email sent to employee: ${payroll.full_name}`)
+        },
+        onError: (errors) => {
+          Object.values(errors).forEach((message) => {
+            toast.error(`Error: ${message}`)
+          })
+        },
+      },
+    )
   }
 
   // Refresh data
@@ -248,6 +288,24 @@ const PayrollIndex = ({ payrolls = [], payrollPeriods = [], employees = [] }: Pa
       onError: () => {
         setIsRefreshing(false)
         toast.error("Failed to refresh data")
+      },
+    })
+  }
+
+  // Create new payroll period
+  const handleCreatePeriod = (e) => {
+    e.preventDefault()
+
+    router.post("/payroll/periods", newPeriodData, {
+      onSuccess: () => {
+        toast.success("Payroll period created successfully!")
+        setIsNewPeriodModalOpen(false)
+        refreshData()
+      },
+      onError: (errors) => {
+        Object.values(errors).forEach((message) => {
+          toast.error(`Error: ${message}`)
+        })
       },
     })
   }
@@ -345,7 +403,10 @@ const PayrollIndex = ({ payrolls = [], payrollPeriods = [], employees = [] }: Pa
               <Plus className="h-4 w-4 mr-1" />
               Add Payroll
             </Button>
-            <Button className="bg-indigo-600 hover:bg-indigo-700 text-white">
+            <Button
+              onClick={() => setIsNewPeriodModalOpen(true)}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white"
+            >
               <Calendar className="h-4 w-4 mr-1" />
               New Period
             </Button>
@@ -818,7 +879,16 @@ const PayrollIndex = ({ payrolls = [], payrollPeriods = [], employees = [] }: Pa
                       >
                         Edit
                       </Button>
-                      <Button className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white">View Details</Button>
+                      <Button
+                        className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white"
+                        onClick={() => {
+                          router.get(`/payroll?period=${period.id}`)
+                          setActiveTab("entries")
+                          setPeriodFilter(period.id)
+                        }}
+                      >
+                        View Details
+                      </Button>
                     </div>
                   </Card>
                 ))}
@@ -847,6 +917,81 @@ const PayrollIndex = ({ payrolls = [], payrollPeriods = [], employees = [] }: Pa
               setSelectedPayroll(null)
             }}
           />
+        )}
+        {isNewPeriodModalOpen && (
+          <div className="fixed inset-0 flex items-center justify-center bg-black/50 z-50">
+            <div className="bg-white dark:bg-black text-black dark:text-white p-6 rounded-lg shadow-lg w-[500px] max-h-[80vh] overflow-y-auto border border-gray-300 dark:border-gray-700">
+              <h2 className="text-lg font-semibold mb-4">Create New Payroll Period</h2>
+
+              <form onSubmit={handleCreatePeriod}>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Period Start Date</label>
+                    <input
+                      type="date"
+                      name="period_start"
+                      required
+                      value={newPeriodData.period_start}
+                      onChange={handlePeriodStartChange}
+                      className="w-full p-2 border rounded bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Period End Date</label>
+                    <input
+                      type="date"
+                      name="period_end"
+                      required
+                      value={newPeriodData.period_end}
+                      readOnly
+                      className="w-full p-2 border rounded bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 bg-gray-100"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Payment Date</label>
+                    <input
+                      type="date"
+                      name="payment_date"
+                      required
+                      value={newPeriodData.payment_date}
+                      readOnly
+                      className="w-full p-2 border rounded bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 bg-gray-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Status</label>
+                    <select
+                      name="status"
+                      required
+                      value={newPeriodData.status}
+                      onChange={(e) => setNewPeriodData({ ...newPeriodData, status: e.target.value })}
+                      className="w-full p-2 border rounded bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700"
+                    >
+                      <option value="Open">Open</option>
+                      <option value="Closed">Closed</option>
+                      <option value="Processing">Processing</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex justify-end space-x-2 mt-6">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setIsNewPeriodModalOpen(false)}
+                    className="border-gray-500 text-gray-600 dark:border-gray-400 dark:text-gray-300"
+                  >
+                    Cancel
+                  </Button>
+                  <Button type="submit" className="bg-indigo-600 hover:bg-indigo-700 text-white">
+                    Create Period
+                  </Button>
+                </div>
+              </form>
+            </div>
+          </div>
         )}
       </div>
     </AppLayout>

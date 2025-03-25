@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\PayrollEntry;
 use App\Models\Employee;
 use App\Models\PayrollPeriod;
+use App\Models\Attendance;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Log;
@@ -13,27 +14,26 @@ use Inertia\Inertia;
 class PayrollController extends Controller
 {
     /**
-     * Display a listing of the resource.
+     * Display a listing of the payroll entries.
      */
     public function index()
     {
         try {
-            $payrolls = PayrollEntry::with(['employee', 'payrollPeriod'])->get()->map(function ($payroll) {
-                // Add the full_name directly to the payroll object
-                $payroll->full_name = $payroll->employee ? $payroll->employee->full_name : '';
-                return $payroll;
-            });
-            $employees = Employee::all();
-            $payrollPeriods = PayrollPeriod::all();
+            $payrolls = PayrollEntry::with(['employee', 'payrollPeriod'])
+                ->get()
+                ->map(function ($payroll) {
+                    $payroll->full_name = $payroll->employee ? $payroll->employee->full_name : '';
+                    return $payroll;
+                });
 
             return Inertia::render('Payroll/Index', [
                 'payrolls' => $payrolls,
-                'employees' => $employees,
-                'payrollPeriods' => $payrollPeriods,
+                'employees' => Employee::all(),
+                'payrollPeriods' => PayrollPeriod::all(),
             ]);
         } catch (\Exception $e) {
-            Log::error($e->getMessage());
-            
+            Log::error('Payroll Index Error: ' . $e->getMessage());
+
             return Inertia::render('Payroll/Index', [
                 'error' => 'Failed to retrieve payrolls.',
                 'payrolls' => [],
@@ -44,198 +44,92 @@ class PayrollController extends Controller
     }
 
     /**
-     * Store a newly created resource in storage.
+     * Generate payroll entries from attendance.
      */
-    public function store(Request $request)
+    public function generateFromAttendance(Request $request)
     {
         try {
-            // Validate the request data
+            // Validate request
             $validator = Validator::make($request->all(), [
-                'employee_number' => 'required|exists:employees,employee_number',
                 'payroll_period_id' => 'required|exists:payroll_periods,id',
-                'gross_pay' => 'required|numeric',
-                'sss_deduction' => 'nullable|numeric',
-                'philhealth_deduction' => 'nullable|numeric',
-                'pagibig_deduction' => 'nullable|numeric',
-                'tax_deduction' => 'nullable|numeric',
-                'cash_advance' => 'nullable|numeric',
-                'loan' => 'nullable|numeric',
-                'vat' => 'nullable|numeric',
-                'other_deductions' => 'nullable|numeric',
-                'total_deductions' => 'nullable|numeric',
-                'net_pay' => 'required|numeric',
-                'ytd_earnings' => 'nullable|numeric',
-                'thirteenth_month_pay' => 'nullable|numeric',
-                'daily_rates' => 'nullable|array',
-                'status' => 'required',
             ]);
 
             if ($validator->fails()) {
                 return redirect()->back()->withErrors($validator)->withInput();
             }
 
-            // Create a new payroll record
-            $payroll = PayrollEntry::create($request->all());
+            $payrollPeriod = PayrollPeriod::findOrFail($request->input('payroll_period_id'));
 
-            return redirect()->route('payroll.index')->with('success', 'Payroll created successfully.');
-        } catch (\Exception $e) {
-            Log::error($e->getMessage());
+            // Get all attendances within the payroll period
+            $attendances = Attendance::whereBetween('work_date', [
+                $payrollPeriod->period_start,
+                $payrollPeriod->period_end
+            ])->get();
 
-            return redirect()->back()->with('error', 'Failed to create payroll: ' . $e->getMessage());
-        }
-    }
-
-    /**
-     * Display the specified resource.
-     */
-    public function show(string $id)
-    {
-        try {
-            $payroll = PayrollEntry::with(['employee', 'payrollPeriod'])->findOrFail($id);
-            $payroll->full_name = $payroll->employee ? $payroll->employee->full_name : '';
-
-            return Inertia::render('Payroll/Show', [
-                'payroll' => $payroll,
-            ]);
-        } catch (\Exception $e) {
-            Log::error($e->getMessage());
-
-            return redirect()->route('payroll.index')->with('error', 'Payroll not found.');
-        }
-    }
-
-    /**
-     * Update the specified resource in storage.
-     */
-    public function update(Request $request, string $id)
-    {
-        try {
-            // Validate the request data
-            $validator = Validator::make($request->all(), [
-                'employee_number' => 'required|exists:employees,employee_number',
-                'payroll_period_id' => 'required|exists:payroll_periods,id',
-                'gross_pay' => 'required|numeric',
-                'sss_deduction' => 'nullable|numeric',
-                'philhealth_deduction' => 'nullable|numeric',
-                'pagibig_deduction' => 'nullable|numeric',
-                'tax_deduction' => 'nullable|numeric',
-                'cash_advance' => 'nullable|numeric',
-                'loan' => 'nullable|numeric',
-                'vat' => 'nullable|numeric',
-                'other_deductions' => 'nullable|numeric',
-                'total_deductions' => 'nullable|numeric',
-                'net_pay' => 'required|numeric',
-                'ytd_earnings' => 'nullable|numeric',
-                'thirteenth_month_pay' => 'nullable|numeric',
-                'daily_rates' => 'nullable|array',
-                'status' => 'required',
-            ]);
-
-            if ($validator->fails()) {
-                return redirect()->back()->withErrors($validator)->withInput();
+            if ($attendances->isEmpty()) {
+                return redirect()->back()->with('error', 'No attendance records found for this payroll period.');
             }
 
-            // Find the payroll record
-            $payroll = PayrollEntry::findOrFail($id);
+            // Get all unique employee numbers from attendance records
+            $employeeNumbers = $attendances->pluck('employee_number')->unique();
 
-            // Update the payroll record
-            $payroll->update($request->all());
+            // Retrieve employees in a single query
+            $employees = Employee::whereIn('employee_number', $employeeNumbers)->get()->keyBy('employee_number');
 
-            return redirect()->route('payroll.index')->with('success', 'Payroll updated successfully.');
-        } catch (\Exception $e) {
-            Log::error($e->getMessage());
+            // Process payroll for each employee
+            foreach ($attendances->groupBy('employee_number') as $employeeNumber => $employeeAttendances) {
+                $employee = $employees->get($employeeNumber);
 
-            return redirect()->back()->with('error', 'Failed to update payroll: ' . $e->getMessage());
-        }
-    }
+                if (!$employee) {
+                    Log::warning("Employee not found: {$employeeNumber}");
+                    continue;
+                }
 
-    /**
-     * Remove the specified resource from storage.
-     */
-    public function destroy(string $id)
-    {
-        try {
-            $payroll = PayrollEntry::findOrFail($id);
-            $payroll->delete();
+                $grossPay = 0;
+                $dailyRates = 0;
 
-            return redirect()->route('payroll.index')->with('success', 'Payroll deleted successfully.');
-        } catch (\Exception $e) {
-            Log::error($e->getMessage());
+                foreach ($employeeAttendances as $attendance) {
+                    if ($attendance->status === 'Present') {
+                        $grossPay += $attendance->daily_rate;
+                        $dailyRates += $attendance->daily_rate;
+                    }
+                    $grossPay += $attendance->adjustment; // Add adjustments if any
+                }
 
-            return redirect()->route('payroll.index')->with('error', 'Failed to delete payroll: ' . $e->getMessage());
-        }
-    }
+                // Deduction calculations
+                $sssDeduction = max(0, $grossPay * 0.0363);
+                $philhealthDeduction = max(0, $grossPay * 0.03);
+                $pagibigDeduction = 100;
+                $taxDeduction = max(0, ($grossPay > 20833) ? ($grossPay - 20833) * 0.20 : 0);
 
-    /**
-     * Create a new payroll period.
-     */
-    public function createPeriod(Request $request)
-    {
-        try {
-            $validator = Validator::make($request->all(), [
-                'period_start' => 'required|date',
-                'period_end' => 'required|date|after_or_equal:period_start',
-                'payment_date' => 'required|date|after_or_equal:period_end',
-                'status' => 'required|in:open,closed',
-            ]);
+                $totalDeductions = $sssDeduction + $philhealthDeduction + $pagibigDeduction + $taxDeduction;
+                $netPay = max(0, $grossPay - $totalDeductions);
 
-            if ($validator->fails()) {
-                return redirect()->back()->withErrors($validator)->withInput();
+                // Create or update payroll entry
+                PayrollEntry::updateOrCreate(
+                    [
+                        'employee_number' => $employeeNumber,
+                        'payroll_period_id' => $payrollPeriod->id,
+                    ],
+                    [
+                        'gross_pay' => $grossPay,
+                        'sss_deduction' => $sssDeduction,
+                        'philhealth_deduction' => $philhealthDeduction,
+                        'pagibig_deduction' => $pagibigDeduction,
+                        'tax_deduction' => $taxDeduction,
+                        'total_deductions' => $totalDeductions,
+                        'net_pay' => $netPay,
+                        'daily_rates' => $dailyRates,
+                        'status' => 'generated',
+                    ]
+                );
             }
 
-            $period = PayrollPeriod::create($request->all());
-
-            return redirect()->route('payroll.index')->with('success', 'Payroll period created successfully.');
+            return redirect()->back()->with('success', 'Payroll generated successfully!');
         } catch (\Exception $e) {
-            Log::error($e->getMessage());
+            Log::error('Payroll Generation Error: ' . $e->getMessage());
 
-            return redirect()->back()->with('error', 'Failed to create payroll period: ' . $e->getMessage());
-        }
-    }
-
-    /**
-     * Update a payroll period.
-     */
-    public function updatePeriod(Request $request, string $id)
-    {
-        try {
-            $validator = Validator::make($request->all(), [
-                'period_start' => 'required|date',
-                'period_end' => 'required|date|after_or_equal:period_start',
-                'payment_date' => 'required|date|after_or_equal:period_end',
-                'status' => 'required|in:open,closed',
-            ]);
-
-            if ($validator->fails()) {
-                return redirect()->back()->withErrors($validator)->withInput();
-            }
-
-            $period = PayrollPeriod::findOrFail($id);
-            $period->update($request->all());
-
-            return redirect()->route('payroll.index')->with('success', 'Payroll period updated successfully.');
-        } catch (\Exception $e) {
-            Log::error($e->getMessage());
-
-            return redirect()->back()->with('error', 'Failed to update payroll period: ' . $e->getMessage());
-        }
-    }
-
-    /**
-     * Delete a payroll period.
-     */
-    public function destroyPeriod(string $id)
-    {
-        try {
-            $period = PayrollPeriod::findOrFail($id);
-            $period->delete();
-
-            return redirect()->route('payroll.index')->with('success', 'Payroll period deleted successfully.');
-        } catch (\Exception $e) {
-            Log::error($e->getMessage());
-
-            return redirect()->route('payroll.index')->with('error', 'Failed to delete payroll period: ' . $e->getMessage());
+            return redirect()->back()->with('error', 'Failed to generate payroll.');
         }
     }
 }
-

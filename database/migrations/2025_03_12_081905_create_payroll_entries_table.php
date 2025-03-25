@@ -29,7 +29,7 @@ return new class extends Migration
             $table->decimal('ytd_earnings', 10, 2)->nullable();
             $table->decimal('thirteenth_month_pay', 10, 2)->nullable();
             $table->string('status');
-            $table->json('daily_rates')->nullable();
+            $table->decimal('daily_rates',10, 2)->nullable();
             $table->timestamps();
             
             $table->foreign('employee_number')->references('employee_number')->on('employees')->onDelete('cascade');

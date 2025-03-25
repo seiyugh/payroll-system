@@ -1,7 +1,6 @@
 "use client"
 
-import React from "react"
-
+import React, { useEffect, useState } from "react"
 import { Head, usePage } from "@inertiajs/react"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -23,10 +22,7 @@ import {
   Download,
 } from "lucide-react"
 import AppLayout from "@/layouts/app-layout"
-import { useState, useEffect } from "react"
 import { toast } from "sonner"
-
-// Import the export utility
 import { exportToCSV } from "@/utils/export-utils"
 
 // Simple chart component using canvas
@@ -40,7 +36,7 @@ const SimpleChart = ({ data, labels, color = "#4f46e5" }) => {
     const ctx = canvas.getContext("2d")
     const width = canvas.width
     const height = canvas.height
-    const maxValue = Math.max(...data)
+    const maxValue = Math.max(...data, 1) // Ensure we don't divide by zero
     const padding = 20
 
     // Clear canvas
@@ -86,6 +82,22 @@ export default function Dashboard() {
   const { props } = usePage()
   const [isLoading, setIsLoading] = useState(true)
 
+  // Extract data from props
+  const {
+    auth,
+    employee,
+    total_employees = 0,
+    pending_payrolls = 0,
+    attendance_summary = { total: 0, ongoing: 0 },
+    upcoming_pay_dates = [],
+    recent_transactions = [],
+    attendance_data = [0, 0, 0, 0, 0, 0, 0],
+    payroll_data = [0, 0, 0, 0, 0, 0, 0],
+    employee_growth_data = [0, 0, 0, 0, 0, 0, 0],
+    quick_stats = [],
+    upcoming_tasks = [],
+  } = props
+
   // Simulate loading state
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -95,15 +107,6 @@ export default function Dashboard() {
   }, [])
 
   // Safe data extraction with default values
-  const {
-    auth,
-    employee,
-    total_employees,
-    pending_payrolls,
-    attendance_summary,
-    upcoming_pay_dates,
-    recent_transactions,
-  } = props
   const employeeFirstName = auth?.user?.first_name || auth?.user?.name?.split(" ")[0] || "User"
   const totalEmployees = total_employees || 0
   const pendingPayrolls = pending_payrolls || 0
@@ -111,23 +114,28 @@ export default function Dashboard() {
   const upcomingPayDates = upcoming_pay_dates || []
   const recentTransactions = recent_transactions || []
 
-  // Sample data for charts
-  const attendanceData = props.attendance_data || [0, 0, 0, 0, 0, 0, 0]
-  const payrollData = props.payroll_data || [0, 0, 0, 0, 0, 0, 0]
-  const employeeGrowthData = props.employee_growth_data || [0, 0, 0, 0, 0, 0, 0]
-
-  // Quick stats
-  const quickStats = props.quick_stats || [
-    { label: "Attendance Rate", value: "0%", change: "0%", icon: CheckCircle, color: "text-green-500" },
-    { label: "Avg. Daily Rate", value: "$0", change: "$0", icon: TrendingUp, color: "text-indigo-500" },
-    { label: "Pending Requests", value: "0", change: "0", icon: Clock, color: "text-amber-500" },
-    { label: "Compliance", value: "0%", change: "0%", icon: AlertCircle, color: "text-blue-500" },
+  // Default quick stats if not provided
+  const defaultQuickStats = [
+    { label: "Attendance Rate", value: "92%", change: "+2%", icon: CheckCircle, color: "text-green-500" },
+    { label: "Avg. Daily Rate", value: "₱545", change: "+₱15", icon: TrendingUp, color: "text-indigo-500" },
+    { label: "Pending Requests", value: "5", change: "-2", icon: Clock, color: "text-amber-500" },
+    { label: "Compliance", value: "98%", change: "+3%", icon: AlertCircle, color: "text-blue-500" },
   ]
 
-  // Upcoming tasks
-  const upcomingTasks = props.upcoming_tasks || []
+  // Use provided quick stats or default
+  const displayQuickStats = quick_stats.length > 0 ? quick_stats : defaultQuickStats
 
-  // Add this function to the component
+  // Default upcoming tasks if not provided
+  const defaultUpcomingTasks = [
+    { id: 1, title: "Process Payroll", due: "Tomorrow", priority: "High" },
+    { id: 2, title: "Review Attendance", due: "In 2 days", priority: "Medium" },
+    { id: 3, title: "Update Employee Records", due: "Next week", priority: "Low" },
+  ]
+
+  // Use provided upcoming tasks or default
+  const displayUpcomingTasks = upcoming_tasks.length > 0 ? upcoming_tasks : defaultUpcomingTasks
+
+  // Export attendance report
   const exportAttendanceReport = () => {
     toast.success("Exporting attendance report...")
 
@@ -155,6 +163,7 @@ export default function Dashboard() {
     }
   }
 
+  // Export payroll report
   const exportPayrollReport = () => {
     toast.success("Exporting payroll report...")
 
@@ -231,7 +240,7 @@ export default function Dashboard() {
 
       {/* Quick Stats Row */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        {quickStats.map((stat, index) => (
+        {displayQuickStats.map((stat, index) => (
           <Card
             key={index}
             className="p-4 border border-slate-200 dark:border-slate-700 hover:shadow-md transition-shadow"
@@ -273,7 +282,7 @@ export default function Dashboard() {
           </div>
           <div className="mt-2">
             <p className="text-sm text-slate-500 dark:text-slate-400 mb-2">Employee Growth</p>
-            <SimpleChart data={employeeGrowthData} color="#4f46e5" />
+            <SimpleChart data={employee_growth_data} color="#4f46e5" />
           </div>
           <div className="mt-4 flex justify-between text-sm">
             <div>
@@ -306,7 +315,7 @@ export default function Dashboard() {
           </div>
           <div className="mt-2">
             <p className="text-sm text-slate-500 dark:text-slate-400 mb-2">Weekly Attendance Rate</p>
-            <SimpleChart data={attendanceData} color="#22c55e" />
+            <SimpleChart data={attendance_data} color="#22c55e" />
           </div>
           <div className="mt-4">
             <div className="flex justify-between mb-1">
@@ -351,8 +360,8 @@ export default function Dashboard() {
             </Badge>
           </div>
           <div className="mt-2">
-            <p className="text-sm text-slate-500 dark:text-slate-400 mb-2">Monthly Payroll (in $)</p>
-            <SimpleChart data={payrollData} color="#f59e0b" />
+            <p className="text-sm text-slate-500 dark:text-slate-400 mb-2">Monthly Payroll (in ₱)</p>
+            <SimpleChart data={payroll_data} color="#f59e0b" />
           </div>
           <div className="mt-4">
             <h3 className="text-sm font-medium mb-2">Upcoming Pay Dates</h3>
@@ -415,24 +424,32 @@ export default function Dashboard() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {recentTransactions.map((txn) => (
-                  <TableRow key={txn.payroll_entry_id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                    <TableCell className="font-medium">#{txn.payroll_entry_id}</TableCell>
-                    <TableCell>{txn.date}</TableCell>
-                    <TableCell>${txn.amount}</TableCell>
-                    <TableCell>
-                      <Badge
-                        className={
-                          txn.status === "Completed"
-                            ? "bg-green-50 text-green-700 border-green-200 dark:bg-green-900/20 dark:text-green-400 dark:border-green-800"
-                            : "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-800"
-                        }
-                      >
-                        {txn.status}
-                      </Badge>
+                {recentTransactions.length > 0 ? (
+                  recentTransactions.map((txn) => (
+                    <TableRow key={txn.payroll_entry_id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                      <TableCell className="font-medium">#{txn.payroll_entry_id}</TableCell>
+                      <TableCell>{txn.date}</TableCell>
+                      <TableCell>₱{txn.amount}</TableCell>
+                      <TableCell>
+                        <Badge
+                          className={
+                            txn.status === "Completed"
+                              ? "bg-green-50 text-green-700 border-green-200 dark:bg-green-900/20 dark:text-green-400 dark:border-green-800"
+                              : "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-800"
+                          }
+                        >
+                          {txn.status}
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                ) : (
+                  <TableRow>
+                    <TableCell colSpan={4} className="text-center py-4 text-slate-500">
+                      No recent transactions found
                     </TableCell>
                   </TableRow>
-                ))}
+                )}
               </TableBody>
             </Table>
           </div>
@@ -453,7 +470,7 @@ export default function Dashboard() {
             </Button>
           </div>
           <div className="space-y-3">
-            {upcomingTasks.map((task) => (
+            {displayUpcomingTasks.map((task) => (
               <div
                 key={task.id}
                 className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-lg"
