@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/dialog"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Progress } from "@/components/ui/progress"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 
 // Import the export utility
 import { exportToCSV } from "@/utils/export-utils"
@@ -51,6 +52,9 @@ interface Employee {
   employee_number: string
   full_name: string
   email: string
+  daily_rate: number
+  department: string
+  position: string
 }
 
 interface AutomationHistory {
@@ -143,6 +147,7 @@ const PayrollAutomation = ({ periods = [], employees = [], automationHistory = [
   const [isSendingEmails, setIsSendingEmails] = useState(false)
   const [logOutput, setLogOutput] = useState<string>("")
   const [showLogDialog, setShowLogDialog] = useState(false)
+  const [payrollStatus, setPayrollStatus] = useState<string>("Pending")
 
   // Settings state
   const [autoGenerate, setAutoGenerate] = useState(true)
@@ -219,6 +224,7 @@ const PayrollAutomation = ({ periods = [], employees = [], automationHistory = [
       {
         period_id: selectedPeriod,
         send_email: sendEmail,
+        status: payrollStatus, // Include the selected status
       },
       {
         onSuccess: (page) => {
@@ -677,6 +683,34 @@ const PayrollAutomation = ({ periods = [], employees = [], automationHistory = [
                   </select>
                 </div>
 
+                <div className="space-y-2">
+                  <Label>Payroll Status</Label>
+                  <RadioGroup
+                    value={payrollStatus}
+                    onValueChange={setPayrollStatus}
+                    className="flex flex-col space-y-2"
+                  >
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem value="Pending" id="status-pending" />
+                      <Label htmlFor="status-pending" className="cursor-pointer">
+                        Pending
+                      </Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem value="Completed" id="status-completed" />
+                      <Label htmlFor="status-completed" className="cursor-pointer">
+                        Completed
+                      </Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem value="Rejected" id="status-rejected" />
+                      <Label htmlFor="status-rejected" className="cursor-pointer">
+                        Rejected
+                      </Label>
+                    </div>
+                  </RadioGroup>
+                </div>
+
                 <div className="flex items-center space-x-2">
                   <Checkbox id="sendEmail" checked={sendEmail} onCheckedChange={(checked) => setSendEmail(!!checked)} />
                   <Label htmlFor="sendEmail">Send payslip emails after generation</Label>
@@ -734,13 +768,16 @@ const PayrollAutomation = ({ periods = [], employees = [], automationHistory = [
                             checked={selectedEmployees.includes(employee.id.toString())}
                             onCheckedChange={() => toggleEmployee(employee.id.toString())}
                           />
-                          <Label htmlFor={`employee-${employee.id}`}>
-                            {employee.full_name} ({employee.employee_number})
+                          <Label htmlFor={`employee-${employee.id}`} className="flex flex-col">
+                            <span>
+                              {employee.full_name} ({employee.employee_number})
+                            </span>
                             {employee.email && (
-                              <span className="text-sm text-slate-500 dark:text-slate-400 ml-2">
-                                - {employee.email}
-                              </span>
+                              <span className="text-xs text-slate-500 dark:text-slate-400">{employee.email}</span>
                             )}
+                            <span className="text-xs text-slate-500 dark:text-slate-400">
+                              {employee.department} - {employee.position} - Daily Rate: ₱{employee.daily_rate}
+                            </span>
                           </Label>
                         </div>
                       ))}

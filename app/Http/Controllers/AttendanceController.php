@@ -192,6 +192,25 @@ class AttendanceController extends Controller
         return redirect()->back()->with('success', 'Attendance records uploaded successfully');
     }
 
+    public function bulkUpdate(Request $request)
+{
+    $validated = $request->validate([
+        'attendances' => 'required|array',
+        'attendances.*.id' => 'required|integer|exists:attendance,id',
+        'attendances.*.status' => 'required|string',
+    ]);
+
+    foreach ($validated['attendances'] as $attendanceData) {
+        $attendance = Attendance::find($attendanceData['id']);
+        if ($attendance) {
+            $attendance->update(['status' => $attendanceData['status']]);
+        }
+    }
+
+    return redirect()->back()->with('success', 'Attendance records updated successfully');
+}
+
+
     public function export()
     {
         $attendances = DB::table('attendance')
@@ -248,4 +267,33 @@ class AttendanceController extends Controller
             'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         ])->deleteFileAfterSend(true);
     }
+
+    public function fetchForPayslip(Request $request)
+    {
+        $request->validate([
+            'employee_number' => 'required|string',
+            'start_date' => 'required|date',
+            'end_date' => 'required|date',
+        ]);
+    
+        $attendances = DB::table('attendance')
+            ->select(
+                'attendance.id',
+                'attendance.employee_number',
+                'attendance.work_date',
+                'attendance.daily_rate',
+                'attendance.adjustment',
+                'attendance.status',
+                'employees.full_name'
+            )
+            ->leftJoin('employees', 'attendance.employee_number', '=', 'employees.employee_number')
+            ->where('attendance.employee_number', $request->employee_number)
+            ->whereBetween('attendance.work_date', [$request->start_date, $request->end_date])
+            ->get();
+    
+        return Inertia::render('Payroll/PrintPayslip', [
+            'attendances' => $attendances,
+        ]);
+    }
 }
+

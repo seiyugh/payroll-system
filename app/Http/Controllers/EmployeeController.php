@@ -73,7 +73,7 @@ class EmployeeController extends Controller
     public function update(Request $request, Employee $employee)
     {
         $validator = Validator::make($request->all(), [
-            'employee_number' => 'required|unique:employees,employee_number,' . $employee->id,
+            'employee_number' => 'required|unique:employees,employee_number,' . $employee->employee_number . ',employee_number',
             'full_name' => 'required',
             'last_name' => 'required',
             'first_name' => 'required',
@@ -92,15 +92,16 @@ class EmployeeController extends Controller
             'emergency_contact_name' => 'required',
             'emergency_contact_mobile' => 'required',
         ]);
-
+    
         if ($validator->fails()) {
             return redirect()->back()->withErrors($validator)->withInput();
         }
-
+    
         $employee->update($request->all());
-
+    
         return redirect()->route('employees.index')->with('success', 'Employee updated successfully');
     }
+    
 
     public function destroy(Employee $employee)
     {

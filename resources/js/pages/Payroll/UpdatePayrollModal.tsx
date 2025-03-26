@@ -8,7 +8,8 @@ import { Card } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { router } from "@inertiajs/react"
 import { toast } from "sonner"
-import { AlertCircle, Calendar, DollarSign, FileText, Info, User } from "lucide-react"
+import { AlertCircle, Calendar, DollarSign, FileText, Info, Printer, User } from "lucide-react"
+import PrintPayslip from "./printPayslip"
 
 interface Payroll {
   id: number
@@ -24,9 +25,32 @@ interface Payroll {
   pagibig_deduction: string | null
   tax_deduction: string | null
   other_deductions: string | null
+  cash_advance: string | null
+  loan: string | null
+  vat: string | null
   status: string
   created_at: string | null
   updated_at: string | null
+  daily_rates: string | null | any[]
+  period_start: string | null
+  period_end: string | null
+  daily_rate: string | null
+  attendance_records: string | null | any[]
+  employee?: {
+    id: number
+    employee_number: string
+    full_name: string
+    department: string
+    position: string
+    daily_rate: number
+  }
+  payroll_period?: {
+    id: number
+    period_start: string
+    period_end: string
+    payment_date: string
+    status: string
+  }
 }
 
 interface PayrollPeriod {
@@ -50,11 +74,12 @@ interface Employee {
 
 interface Attendance {
   id: number
-  employee_id: number
-  date: string
-  status: string
+  employee_number: string
+  work_date: string
   daily_rate: number
   adjustment: number
+  status: string
+  full_name?: string
 }
 
 interface UpdatePayrollModalProps {
@@ -62,9 +87,16 @@ interface UpdatePayrollModalProps {
   onClose: () => void
   employees: Employee[]
   payrollPeriods: PayrollPeriod[]
+  formatDailyRatesForSubmission?: (payroll: Payroll) => string
 }
 
-const UpdatePayrollModal = ({ payroll, onClose, employees, payrollPeriods }: UpdatePayrollModalProps) => {
+const UpdatePayrollModal = ({
+  payroll,
+  onClose,
+  employees,
+  payrollPeriods,
+  formatDailyRatesForSubmission,
+}: UpdatePayrollModalProps) => {
   const [formData, setFormData] = useState({
     id: payroll.id,
     employee_number: payroll.employee_number,
@@ -79,28 +111,103 @@ const UpdatePayrollModal = ({ payroll, onClose, employees, payrollPeriods }: Upd
     pagibig_deduction: payroll.pagibig_deduction || "0",
     tax_deduction: payroll.tax_deduction || "0",
     other_deductions: payroll.other_deductions || "0",
+    cash_advance: payroll.cash_advance || "0",
+    loan: payroll.loan || "0",
+    vat: payroll.vat || "0",
     status: payroll.status,
+    attendance_records: payroll.attendance_records || null,
+    daily_rates: payroll.daily_rates || null,
   })
 
-  const [activeTab, setActiveTab] = useState<"details" | "deductions" | "attendance">("details")
+  const [activeTab, setActiveTab] = useState<"details" | "deductions" | "attendance" | "preview">("details")
   const [isLoading, setIsLoading] = useState(false)
   const [attendanceRecords, setAttendanceRecords] = useState<Attendance[]>([])
   const [isLoadingAttendance, setIsLoadingAttendance] = useState(true)
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null)
   const [selectedPeriod, setSelectedPeriod] = useState<PayrollPeriod | null>(null)
+  const [isPrintModalOpen, setIsPrintModalOpen] = useState(false)
+  const [enrichedPayroll, setEnrichedPayroll] = useState<Payroll>(payroll)
 
   // Fetch attendance records for this employee and payroll period
   useEffect(() => {
     const fetchAttendance = async () => {
       setIsLoadingAttendance(true)
       try {
-        const response = await fetch(`/api/attendance/${payroll.employee_number}/${payroll.payroll_period_id}`)
-        if (response.ok) {
-          const data = await response.json()
-          setAttendanceRecords(data)
-        } else {
-          console.error("Failed to fetch attendance records")
-          toast.error("Failed to load attendance records")
+        // Find the selected employee and period
+        const employee = employees.find((emp) => emp.employee_number === payroll.employee_number) || null
+        const period = payrollPeriods.find((p) => p.id === payroll.payroll_period_id) || null
+
+        setSelectedEmployee(employee)
+        setSelectedPeriod(period)
+
+        // If we already have attendance records in the payroll, use those
+        if (payroll.attendance_records) {
+          try {
+            if (typeof payroll.attendance_records === "string") {
+              const parsed = JSON.parse(payroll.attendance_records)
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                setAttendanceRecords(parsed)
+                setIsLoadingAttendance(false)
+                return
+              }
+            } else if (Array.isArray(payroll.attendance_records) && payroll.attendance_records.length > 0) {
+              setAttendanceRecords(payroll.attendance_records)
+              setIsLoadingAttendance(false)
+              return
+            }
+          } catch (e) {
+            console.error("Error parsing attendance records:", e)
+          }
+        }
+
+        // If we don't have attendance records or couldn't parse them, fetch from the API
+        if (period && employee) {
+          const response = await fetch(
+            `/attendance/fetch-for-payslip?employee_number=${employee.employee_number}&start_date=${period.period_start}&end_date=${period.period_end}`,
+          )
+
+          if (response.ok) {
+            const data = await response.json()
+            if (data && data.attendances && Array.isArray(data.attendances)) {
+              setAttendanceRecords(data.attendances)
+
+              // Update the formData with the fetched attendance records
+              setFormData((prev) => ({
+                ...prev,
+                attendance_records: JSON.stringify(data.attendances),
+              }))
+            } else {
+              // If no records found, create empty records for each day in the period
+              const start = new Date(period.period_start)
+              const end = new Date(period.period_end)
+              const emptyRecords = []
+
+              const currentDate = new Date(start)
+              while (currentDate <= end) {
+                emptyRecords.push({
+                  id: 0,
+                  employee_number: employee.employee_number,
+                  work_date: currentDate.toISOString().split("T")[0],
+                  daily_rate: employee.daily_rate,
+                  adjustment: 0,
+                  status: "No Record",
+                  full_name: employee.full_name,
+                })
+                currentDate.setDate(currentDate.getDate() + 1)
+              }
+
+              setAttendanceRecords(emptyRecords)
+
+              // Update the formData with the empty attendance records
+              setFormData((prev) => ({
+                ...prev,
+                attendance_records: JSON.stringify(emptyRecords),
+              }))
+            }
+          } else {
+            console.error("Failed to fetch attendance records")
+            toast.error("Failed to load attendance records")
+          }
         }
       } catch (error) {
         console.error("Error fetching attendance:", error)
@@ -110,22 +217,44 @@ const UpdatePayrollModal = ({ payroll, onClose, employees, payrollPeriods }: Upd
       }
     }
 
-    // Find the selected employee and period
-    const employee = employees.find((emp) => emp.employee_number === payroll.employee_number) || null
-    const period = payrollPeriods.find((p) => p.id === payroll.payroll_period_id) || null
-
-    setSelectedEmployee(employee)
-    setSelectedPeriod(period)
-
     fetchAttendance()
-  }, [payroll.employee_number, payroll.payroll_period_id, employees, payrollPeriods])
+  }, [payroll, employees, payrollPeriods])
+
+  // Update enriched payroll when form data changes
+  useEffect(() => {
+    // Create an enriched payroll object that includes all the data needed for PrintPayslip
+    const updatedPayroll = {
+      ...payroll,
+      ...formData,
+      employee: selectedEmployee
+        ? {
+            ...selectedEmployee,
+            full_name: selectedEmployee.full_name,
+            department: selectedEmployee.department,
+            position: selectedEmployee.designation,
+            daily_rate: selectedEmployee.daily_rate,
+          }
+        : undefined,
+      payroll_period: selectedPeriod
+        ? {
+            ...selectedPeriod,
+            period_start: selectedPeriod.period_start,
+            period_end: selectedPeriod.period_end,
+          }
+        : undefined,
+      period_start: selectedPeriod?.period_start,
+      period_end: selectedPeriod?.period_end,
+    }
+
+    setEnrichedPayroll(updatedPayroll)
+  }, [formData, selectedEmployee, selectedPeriod, payroll])
 
   // Calculate totals from attendance records
   const attendanceTotals = {
     presentDays: attendanceRecords.filter((record) => record.status === "Present").length,
     absentDays: attendanceRecords.filter((record) => record.status === "Absent").length,
     totalDailyRate: attendanceRecords.reduce((sum, record) => sum + Number(record.daily_rate), 0),
-    totalAdjustments: attendanceRecords.reduce((sum, record) => sum + Number(record.adjustment), 0),
+    totalAdjustments: attendanceRecords.reduce((sum, record) => sum + Number(record.adjustment || 0), 0),
   }
 
   // Handle input changes
@@ -144,6 +273,9 @@ const UpdatePayrollModal = ({ payroll, onClose, employees, payrollPeriods }: Upd
         "pagibig_deduction",
         "tax_deduction",
         "other_deductions",
+        "cash_advance",
+        "loan",
+        "vat",
         "gross_pay",
       ].includes(name)
     ) {
@@ -153,7 +285,10 @@ const UpdatePayrollModal = ({ payroll, onClose, employees, payrollPeriods }: Upd
         Number.parseFloat(name === "philhealth_deduction" ? value : formData.philhealth_deduction) +
         Number.parseFloat(name === "pagibig_deduction" ? value : formData.pagibig_deduction) +
         Number.parseFloat(name === "tax_deduction" ? value : formData.tax_deduction) +
-        Number.parseFloat(name === "other_deductions" ? value : formData.other_deductions)
+        Number.parseFloat(name === "other_deductions" ? value : formData.other_deductions) +
+        Number.parseFloat(name === "cash_advance" ? value : formData.cash_advance) +
+        Number.parseFloat(name === "loan" ? value : formData.loan) +
+        Number.parseFloat(name === "vat" ? value : formData.vat)
 
       const netPay = grossPay - totalDeductions
       setFormData((prev) => ({
@@ -168,7 +303,21 @@ const UpdatePayrollModal = ({ payroll, onClose, employees, payrollPeriods }: Upd
     e.preventDefault()
     setIsLoading(true)
 
-    router.put(`/payroll/${formData.id}`, formData, {
+    // Prepare the data for submission
+    const submissionData = {
+      ...formData,
+      // Format daily rates if needed
+      daily_rates: formatDailyRatesForSubmission
+        ? formatDailyRatesForSubmission(enrichedPayroll)
+        : formData.daily_rates,
+      // Ensure attendance records are properly formatted
+      attendance_records:
+        typeof formData.attendance_records === "string"
+          ? formData.attendance_records
+          : JSON.stringify(formData.attendance_records || attendanceRecords),
+    }
+
+    router.put(`/payroll/${formData.id}`, submissionData, {
       onSuccess: () => {
         toast.success("Payroll updated successfully!")
         setIsLoading(false)
@@ -201,6 +350,118 @@ const UpdatePayrollModal = ({ payroll, onClose, employees, payrollPeriods }: Upd
       currency: "PHP",
       minimumFractionDigits: 2,
     })
+  }
+
+  // Get status badge color
+  const getStatusBadgeColor = (status: string) => {
+    switch (status) {
+      case "Present":
+        return "bg-green-50 text-green-700 border-green-200 dark:bg-green-900/20 dark:text-green-400 dark:border-green-800"
+      case "Absent":
+        return "bg-red-50 text-red-700 border-red-200 dark:bg-red-900/20 dark:text-red-400 dark:border-red-800"
+      case "Day Off":
+        return "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/20 dark:text-blue-400 dark:border-blue-800"
+      case "Holiday":
+        return "bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-900/20 dark:text-purple-400 dark:border-purple-800"
+      case "Half Day":
+        return "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-800"
+      case "Leave":
+        return "bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-900/20 dark:text-indigo-400 dark:border-indigo-800"
+      case "No Record":
+        return "bg-gray-50 text-gray-700 border-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-700"
+      default:
+        return "bg-slate-50 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700"
+    }
+  }
+
+  // Handle attendance status update
+  const handleAttendanceStatusChange = (index: number, newStatus: string) => {
+    const updatedRecords = [...attendanceRecords]
+    updatedRecords[index].status = newStatus
+    setAttendanceRecords(updatedRecords)
+
+    // Update the formData with the updated attendance records
+    setFormData((prev) => ({
+      ...prev,
+      attendance_records: JSON.stringify(updatedRecords),
+    }))
+
+    // Recalculate gross pay based on updated attendance
+    recalculateGrossPay(updatedRecords)
+  }
+
+  // Handle attendance adjustment update
+  const handleAttendanceAdjustmentChange = (index: number, newAdjustment: number) => {
+    const updatedRecords = [...attendanceRecords]
+    updatedRecords[index].adjustment = newAdjustment
+    setAttendanceRecords(updatedRecords)
+
+    // Update the formData with the updated attendance records
+    setFormData((prev) => ({
+      ...prev,
+      attendance_records: JSON.stringify(updatedRecords),
+    }))
+
+    // Recalculate gross pay based on updated attendance
+    recalculateGrossPay(updatedRecords)
+  }
+
+  // Calculate amount based on status and daily rate (same as in PrintPayslip)
+  const calculateAmount = (status: string, dailyRate: number) => {
+    switch (status.toLowerCase()) {
+      case "present":
+        return dailyRate
+      case "half day":
+        return dailyRate / 2
+      case "absent":
+      case "day off":
+        return 0
+      case "holiday":
+        return dailyRate // Usually paid for holidays
+      case "leave":
+        return dailyRate // Paid leave
+      case "no record":
+        return 0 // No pay if no record
+      default:
+        return 0 // Default to 0 if status is unknown
+    }
+  }
+
+  // Recalculate gross pay based on attendance records
+  const recalculateGrossPay = (records: Attendance[]) => {
+    const totalPay = records.reduce((sum, record) => {
+      const amount = calculateAmount(record.status, Number(record.daily_rate))
+      const adjustment = Number(record.adjustment || 0)
+      return sum + amount + adjustment
+    }, 0)
+
+    setFormData((prev) => {
+      const updatedGrossPay = totalPay.toFixed(2)
+
+      // Calculate new net pay
+      const totalDeductions =
+        Number.parseFloat(prev.sss_deduction) +
+        Number.parseFloat(prev.philhealth_deduction) +
+        Number.parseFloat(prev.pagibig_deduction) +
+        Number.parseFloat(prev.tax_deduction) +
+        Number.parseFloat(prev.other_deductions) +
+        Number.parseFloat(prev.cash_advance) +
+        Number.parseFloat(prev.loan) +
+        Number.parseFloat(prev.vat)
+
+      const netPay = totalPay - totalDeductions
+
+      return {
+        ...prev,
+        gross_pay: updatedGrossPay,
+        net_pay: netPay.toFixed(2),
+      }
+    })
+  }
+
+  // Open print preview
+  const openPrintPreview = () => {
+    setIsPrintModalOpen(true)
   }
 
   return (
@@ -291,6 +552,10 @@ const UpdatePayrollModal = ({ payroll, onClose, employees, payrollPeriods }: Upd
                 <TabsTrigger value="attendance">
                   <Calendar className="h-4 w-4 mr-2" />
                   Attendance Records
+                </TabsTrigger>
+                <TabsTrigger value="preview">
+                  <Printer className="h-4 w-4 mr-2" />
+                  Payslip Preview
                 </TabsTrigger>
               </TabsList>
 
@@ -444,6 +709,48 @@ const UpdatePayrollModal = ({ payroll, onClose, employees, payrollPeriods }: Upd
                     </div>
                   </div>
                   <div>
+                    <label className="block text-sm font-medium mb-1">Cash Advance</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-500">₱</span>
+                      <input
+                        type="number"
+                        name="cash_advance"
+                        step="0.01"
+                        className="pl-8 p-2 border rounded w-full dark:bg-slate-800 dark:border-slate-700"
+                        value={formData.cash_advance}
+                        onChange={handleChange}
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Loan</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-500">₱</span>
+                      <input
+                        type="number"
+                        name="loan"
+                        step="0.01"
+                        className="pl-8 p-2 border rounded w-full dark:bg-slate-800 dark:border-slate-700"
+                        value={formData.loan}
+                        onChange={handleChange}
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">VAT</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-500">₱</span>
+                      <input
+                        type="number"
+                        name="vat"
+                        step="0.01"
+                        className="pl-8 p-2 border rounded w-full dark:bg-slate-800 dark:border-slate-700"
+                        value={formData.vat}
+                        onChange={handleChange}
+                      />
+                    </div>
+                  </div>
+                  <div>
                     <label className="block text-sm font-medium mb-1">Other Deductions</label>
                     <div className="relative">
                       <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-500">₱</span>
@@ -479,6 +786,18 @@ const UpdatePayrollModal = ({ payroll, onClose, employees, payrollPeriods }: Upd
                       <span>{formatCurrency(formData.tax_deduction)}</span>
                     </div>
                     <div className="flex justify-between text-sm">
+                      <span>Cash Advance:</span>
+                      <span>{formatCurrency(formData.cash_advance)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span>Loan:</span>
+                      <span>{formatCurrency(formData.loan)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span>VAT:</span>
+                      <span>{formatCurrency(formData.vat)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
                       <span>Other:</span>
                       <span>{formatCurrency(formData.other_deductions)}</span>
                     </div>
@@ -490,6 +809,9 @@ const UpdatePayrollModal = ({ payroll, onClose, employees, payrollPeriods }: Upd
                             Number.parseFloat(formData.philhealth_deduction) +
                             Number.parseFloat(formData.pagibig_deduction) +
                             Number.parseFloat(formData.tax_deduction) +
+                            Number.parseFloat(formData.cash_advance) +
+                            Number.parseFloat(formData.loan) +
+                            Number.parseFloat(formData.vat) +
                             Number.parseFloat(formData.other_deductions),
                         )}
                       </span>
@@ -520,34 +842,51 @@ const UpdatePayrollModal = ({ payroll, onClose, employees, payrollPeriods }: Upd
                         </tr>
                       </thead>
                       <tbody>
-                        {attendanceRecords.map((record) => (
-                          <tr
-                            key={record.id}
-                            className="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/50"
-                          >
-                            <td className="py-2 px-4">{formatDate(record.date)}</td>
-                            <td className="py-2 px-4">
-                              <span
-                                className={`px-2 py-1 rounded-full text-xs ${
-                                  record.status === "Present"
-                                    ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"
-                                    : record.status === "Absent"
-                                      ? "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400"
-                                      : "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400"
-                                }`}
-                              >
-                                {record.status}
-                              </span>
-                            </td>
-                            <td className="py-2 px-4">{formatCurrency(record.daily_rate)}</td>
-                            <td className="py-2 px-4">{formatCurrency(record.adjustment)}</td>
-                            <td className="py-2 px-4">
-                              {formatCurrency(
-                                record.status === "Present" ? record.daily_rate + record.adjustment : record.adjustment,
-                              )}
-                            </td>
-                          </tr>
-                        ))}
+                        {attendanceRecords.map((record, index) => {
+                          const amount = calculateAmount(record.status, Number(record.daily_rate))
+                          const adjustment = Number(record.adjustment || 0)
+                          const total = amount + adjustment
+
+                          return (
+                            <tr
+                              key={index}
+                              className="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/50"
+                            >
+                              <td className="py-2 px-4">{formatDate(record.work_date)}</td>
+                              <td className="py-2 px-4">
+                                <select
+                                  value={record.status}
+                                  onChange={(e) => handleAttendanceStatusChange(index, e.target.value)}
+                                  className="p-1 border rounded bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-xs"
+                                >
+                                  <option value="Present">Present</option>
+                                  <option value="Absent">Absent</option>
+                                  <option value="Half Day">Half Day</option>
+                                  <option value="Day Off">Day Off</option>
+                                  <option value="Leave">Leave</option>
+                                  <option value="Holiday">Holiday</option>
+                                  <option value="No Record">No Record</option>
+                                </select>
+                              </td>
+                              <td className="py-2 px-4">{formatCurrency(record.daily_rate)}</td>
+                              <td className="py-2 px-4">
+                                <div className="relative">
+                                  <span className="absolute left-2 top-1/2 transform -translate-y-1/2 text-slate-500 text-xs">
+                                    ₱
+                                  </span>
+                                  <input
+                                    type="number"
+                                    value={record.adjustment || 0}
+                                    onChange={(e) => handleAttendanceAdjustmentChange(index, Number(e.target.value))}
+                                    className="pl-6 p-1 border rounded w-24 text-xs"
+                                    step="0.01"
+                                  />
+                                </div>
+                              </td>
+                              <td className="py-2 px-4">{formatCurrency(total)}</td>
+                            </tr>
+                          )
+                        })}
                       </tbody>
                       <tfoot>
                         <tr className="bg-slate-50 dark:bg-slate-800/70 font-medium">
@@ -557,7 +896,13 @@ const UpdatePayrollModal = ({ payroll, onClose, employees, payrollPeriods }: Upd
                           <td className="py-2 px-4">{formatCurrency(attendanceTotals.totalDailyRate)}</td>
                           <td className="py-2 px-4">{formatCurrency(attendanceTotals.totalAdjustments)}</td>
                           <td className="py-2 px-4">
-                            {formatCurrency(attendanceTotals.totalDailyRate + attendanceTotals.totalAdjustments)}
+                            {formatCurrency(
+                              attendanceRecords.reduce((sum, record) => {
+                                const amount = calculateAmount(record.status, Number(record.daily_rate))
+                                const adjustment = Number(record.adjustment || 0)
+                                return sum + amount + adjustment
+                              }, 0),
+                            )}
                           </td>
                         </tr>
                       </tfoot>
@@ -579,6 +924,100 @@ const UpdatePayrollModal = ({ payroll, onClose, employees, payrollPeriods }: Upd
                         This employee has {attendanceTotals.presentDays} present days and {attendanceTotals.absentDays}{" "}
                         absent days during this payroll period.
                       </p>
+                    </div>
+                  </div>
+                </div>
+              </TabsContent>
+
+              <TabsContent value="preview" className="space-y-4">
+                <div className="flex justify-end mb-4">
+                  <Button
+                    type="button"
+                    onClick={openPrintPreview}
+                    className="flex items-center gap-1 bg-blue-600 hover:bg-blue-700 text-white"
+                  >
+                    <Printer className="h-4 w-4" />
+                    Open Print View
+                  </Button>
+                </div>
+
+                <div className="border rounded-lg p-4 bg-slate-50 dark:bg-slate-800/50">
+                  <h3 className="font-semibold text-lg mb-4">Payslip Preview</h3>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                    <div>
+                      <h4 className="font-medium text-sm mb-2">Employee Information</h4>
+                      <div className="space-y-1 text-sm">
+                        <p>
+                          <span className="font-medium">Name:</span> {formData.full_name}
+                        </p>
+                        <p>
+                          <span className="font-medium">Employee #:</span> {formData.employee_number}
+                        </p>
+                        {selectedEmployee && (
+                          <>
+                            <p>
+                              <span className="font-medium">Department:</span> {selectedEmployee.department}
+                            </p>
+                            <p>
+                              <span className="font-medium">Position:</span> {selectedEmployee.designation}
+                            </p>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    <div>
+                      <h4 className="font-medium text-sm mb-2">Payroll Information</h4>
+                      <div className="space-y-1 text-sm">
+                        {selectedPeriod && (
+                          <p>
+                            <span className="font-medium">Period:</span> {formatDate(selectedPeriod.period_start)} to{" "}
+                            {formatDate(selectedPeriod.period_end)}
+                          </p>
+                        )}
+                        <p>
+                          <span className="font-medium">Gross Pay:</span> {formatCurrency(formData.gross_pay)}
+                        </p>
+                        <p>
+                          <span className="font-medium">Total Deductions:</span>{" "}
+                          {formatCurrency(
+                            Number.parseFloat(formData.sss_deduction) +
+                              Number.parseFloat(formData.philhealth_deduction) +
+                              Number.parseFloat(formData.pagibig_deduction) +
+                              Number.parseFloat(formData.tax_deduction) +
+                              Number.parseFloat(formData.cash_advance) +
+                              Number.parseFloat(formData.loan) +
+                              Number.parseFloat(formData.vat) +
+                              Number.parseFloat(formData.other_deductions),
+                          )}
+                        </p>
+                        <p className="font-bold">
+                          <span className="font-medium">Net Pay:</span> {formatCurrency(formData.net_pay)}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-6">
+                    <h4 className="font-medium text-sm mb-2">Attendance Summary</h4>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
+                      <div className="p-2 bg-white dark:bg-slate-900 rounded border">
+                        <p className="font-medium">Present Days</p>
+                        <p className="text-lg">{attendanceTotals.presentDays}</p>
+                      </div>
+                      <div className="p-2 bg-white dark:bg-slate-900 rounded border">
+                        <p className="font-medium">Absent Days</p>
+                        <p className="text-lg">{attendanceTotals.absentDays}</p>
+                      </div>
+                      <div className="p-2 bg-white dark:bg-slate-900 rounded border">
+                        <p className="font-medium">Total Daily Rate</p>
+                        <p className="text-lg">{formatCurrency(attendanceTotals.totalDailyRate)}</p>
+                      </div>
+                      <div className="p-2 bg-white dark:bg-slate-900 rounded border">
+                        <p className="font-medium">Total Adjustments</p>
+                        <p className="text-lg">{formatCurrency(attendanceTotals.totalAdjustments)}</p>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -612,6 +1051,9 @@ const UpdatePayrollModal = ({ payroll, onClose, employees, payrollPeriods }: Upd
           </form>
         </div>
       </div>
+
+      {/* Print Payslip Modal */}
+      {isPrintModalOpen && <PrintPayslip payroll={enrichedPayroll} onClose={() => setIsPrintModalOpen(false)} />}
     </div>
   )
 }
