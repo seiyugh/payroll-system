@@ -7,50 +7,46 @@ use App\Http\Controllers\EmployeeController;
 use App\Http\Controllers\PayrollController;
 use App\Http\Controllers\PayrollAutomationController;
 use App\Http\Controllers\ProfileController;
-use App\Models\Employee;
 use Inertia\Inertia;
 
-// Public home page
+// ✅ Public home page
 Route::get('/', function () {
-    return Inertia::render('welcome', [
+    return Inertia::render('Welcome', [
         'canLogin' => Route::has('login'),
         'canRegister' => Route::has('register'),
     ]);
 })->name('home');
 
-// Authenticated user routes
+// ✅ Move "fetch-for-payslip" outside middleware to test if it works
+Route::get('/attendance/fetch-for-payslip', [AttendanceController::class, 'fetchForPayslip'])
+    ->middleware('auth') // ✅ Requires authentication (optional)
+    ->name('attendance.fetch-for-payslip');
+
+// ✅ Authenticated user routes
 Route::middleware(['auth', 'verified'])->group(function () {
+    // ✅ Dashboard route
+    Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
 
-    // Dashboard route
-    Route::get('/dashboard', function () {
-        return Inertia::render('Dashboard');
-    })->name('dashboard');
-
-    // Profile routes
+    // ✅ Profile routes
     Route::prefix('profile')->group(function () {
         Route::get('/', [ProfileController::class, 'edit'])->name('profile.edit');
         Route::patch('/', [ProfileController::class, 'update'])->name('profile.update');
         Route::delete('/', [ProfileController::class, 'destroy'])->name('profile.destroy');
     });
 
-    // Employees Routes
+    // ✅ Employees Routes
     Route::prefix('employees')->group(function () {
-        Route::get('/', function () {
-            return Inertia::render('Employees/Index', [
-                'employees' => Employee::all()
-            ]);
-        })->name('employees.index');
-
+        Route::get('/', [EmployeeController::class, 'index'])->name('employees.index');
         Route::get('/create', [EmployeeController::class, 'create'])->name('employees.create');
         Route::post('/', [EmployeeController::class, 'store'])->name('employees.store');
         Route::get('/{id}', [EmployeeController::class, 'show'])->name('employees.show');
-        Route::get('/{employee}/edit', [EmployeeController::class, 'edit'])->name('employees.edit');
-        Route::put('/{employee}', [EmployeeController::class, 'update'])->name('employees.update');
-        Route::delete('/{employee}', [EmployeeController::class, 'destroy'])->name('employees.destroy');
+        Route::get('/{id}/edit', [EmployeeController::class, 'edit'])->name('employees.edit');
+        Route::put('/{id}', [EmployeeController::class, 'update'])->name('employees.update');
+        Route::delete('/{id}', [EmployeeController::class, 'destroy'])->name('employees.destroy');
         Route::post('/bulk-store', [EmployeeController::class, 'bulkStore'])->name('employees.bulk.store');
     });
 
-    // Payroll Routes
+    // ✅ Payroll Routes
     Route::prefix('payroll')->group(function () {
         Route::get('/', [PayrollController::class, 'index'])->name('payroll.index');
         Route::post('/', [PayrollController::class, 'store'])->name('payroll.store');
@@ -74,7 +70,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::post('/generate-from-attendance', [PayrollController::class, 'generateFromAttendance'])->name('payroll.generate-from-attendance');
     });
 
-    // Attendance Routes
+    // ✅ Attendance Routes
     Route::prefix('attendance')->group(function () {
         Route::get('/', [AttendanceController::class, 'index'])->name('attendance.index');
         Route::get('/create', [AttendanceController::class, 'create'])->name('attendance.create');
@@ -83,7 +79,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::get('/{id}/edit', [AttendanceController::class, 'edit'])->name('attendance.edit');
         Route::put('/{id}', [AttendanceController::class, 'update'])->name('attendance.update');
         Route::delete('/{id}', [AttendanceController::class, 'destroy'])->name('attendance.destroy');
-        
+        Route::match(['put', 'post'], '/bulk-update', [AttendanceController::class, 'bulkUpdate'])->name('attendance.bulk.update');
+
         // Additional routes for bulk operations and export
         Route::post('/bulk', [AttendanceController::class, 'bulkStore'])->name('attendance.bulk.store');
         Route::post('/bulk-upload', [AttendanceController::class, 'bulkUpload'])->name('attendance.bulk.upload');
@@ -91,6 +88,6 @@ Route::middleware(['auth', 'verified'])->group(function () {
     });
 });
 
-// Include additional route files
+// ✅ Include additional route files
 require __DIR__ . '/settings.php';
 require __DIR__ . '/auth.php';

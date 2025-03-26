@@ -50,6 +50,10 @@ interface Payroll {
   status: string
   created_at: string | null
   updated_at: string | null
+  daily_rates: string | null | any[]
+  period_start: string | null
+  period_end: string | null
+  daily_rate: string | null
 }
 
 interface PayrollPeriod {
@@ -105,7 +109,31 @@ const PayrollIndex = ({ payrolls = [], payrollPeriods = [], employees = [] }: Pa
   const payrollData = payrolls || []
   const periodData = payrollPeriods || []
 
-  const openAddModal = () => setIsAddModalOpen(true)
+  // Add a function to check if a payroll already exists for an employee and period
+  const checkExistingPayroll = async (employeeNumber, periodId) => {
+    try {
+      const response = await fetch(
+        `/payroll/check-existing?employee_number=${employeeNumber}&payroll_period_id=${periodId}`,
+      )
+      const data = await response.json()
+      return data.exists
+    } catch (error) {
+      console.error("Error checking existing payroll:", error)
+      return false
+    }
+  }
+
+  // Update the openAddModal function to include validation
+  const openAddModal = () => {
+    // Check if there are any open payroll periods before opening the modal
+    const openPeriods = payrollPeriods.filter((period) => period.status === "Open")
+    if (openPeriods.length === 0) {
+      toast.error("No open payroll periods available. Please create a new period first.")
+      return
+    }
+
+    setIsAddModalOpen(true)
+  }
   const closeAddModal = () => setIsAddModalOpen(false)
 
   const openUpdateModal = (payroll: Payroll) => {
@@ -376,6 +404,48 @@ const PayrollIndex = ({ payrolls = [], payrollPeriods = [], employees = [] }: Pa
     }, 0),
     completedCount: payrollData.filter((p) => p.status === "Completed").length,
     pendingCount: payrollData.filter((p) => p.status === "Pending").length,
+  }
+
+  // Add a function to ensure daily rates are properly formatted when updating payroll
+  const formatDailyRatesForSubmission = (payroll) => {
+    // If daily_rates is already an array, ensure it's properly formatted
+    if (Array.isArray(payroll.daily_rates)) {
+      return JSON.stringify(payroll.daily_rates)
+    }
+
+    // If daily_rates is a string, try to parse it
+    if (typeof payroll.daily_rates === "string") {
+      try {
+        // Check if it's already valid JSON
+        JSON.parse(payroll.daily_rates)
+        return payroll.daily_rates
+      } catch (e) {
+        // Not valid JSON, try to convert to proper format
+        console.log("Converting daily_rates to proper JSON format")
+      }
+    }
+
+    // If we reach here, we need to create a default daily rates structure
+    const defaultRates = []
+
+    // If we have period information, use it to generate daily rates
+    if (payroll.period_start && payroll.period_end) {
+      const start = new Date(payroll.period_start)
+      const end = new Date(payroll.period_end)
+      const dailyRate = payroll.daily_rate || 545.15
+
+      const currentDate = new Date(start)
+      while (currentDate <= end) {
+        defaultRates.push({
+          date: currentDate.toISOString().split("T")[0],
+          amount: dailyRate.toString(),
+          additional: "0",
+        })
+        currentDate.setDate(currentDate.getDate() + 1)
+      }
+    }
+
+    return JSON.stringify(defaultRates)
   }
 
   return (
@@ -907,6 +977,7 @@ const PayrollIndex = ({ payrolls = [], payrollPeriods = [], employees = [] }: Pa
             onClose={closeUpdateModal}
             employees={employees}
             payrollPeriods={payrollPeriods}
+            formatDailyRatesForSubmission={formatDailyRatesForSubmission}
           />
         )}
         {isPrintModalOpen && selectedPayroll && (

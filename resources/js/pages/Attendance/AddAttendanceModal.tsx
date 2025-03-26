@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Calendar } from "lucide-react"
+import { toast } from "sonner"
 
 interface Employee {
   id: number
@@ -119,6 +120,20 @@ const AddAttendanceModal = ({ onClose, onSubmit, employees }: AddAttendanceModal
     }
 
     try {
+      // Check if attendance record already exists for this employee and date
+      const selectedEmployee = employees.find((e) => e.employee_number === formData.employee_number)
+      const existingAttendance = employees.some(
+        (employee) =>
+          employee.employee_number === formData.employee_number && employee.full_name === selectedEmployee?.full_name,
+      )
+
+      if (existingAttendance) {
+        // Show toast notification for existing attendance
+        toast.error(`${selectedEmployee?.full_name}'s attendance for that day is existing already`)
+        setIsSubmitting(false)
+        return
+      }
+
       onSubmit(formattedData)
     } catch (error) {
       console.error("Error adding attendance:", error)

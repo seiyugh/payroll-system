@@ -20,6 +20,10 @@ import {
   FileSpreadsheet,
   Wallet,
   Info,
+  Check,
+  X,
+  AlertCircle,
+  Clock,
 } from "lucide-react"
 import AddAttendanceModal from "./AddAttendanceModal"
 import UpdateAttendanceModal from "./UpdateAttendanceModal"
@@ -36,6 +40,11 @@ import {
 } from "@/components/ui/dialog"
 import { Progress } from "@/components/ui/progress"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { format, parseISO, isValid, addDays, subDays } from "date-fns"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Checkbox } from "@/components/ui/checkbox"
 
 interface Attendance {
   id: number
@@ -49,6 +58,9 @@ interface Attendance {
   adjustment: number
   created_at: string | null
   updated_at: string | null
+  time_in?: string
+  time_out?: string
+  notes?: string
 }
 
 interface Employee {
@@ -56,6 +68,8 @@ interface Employee {
   employee_number: string
   full_name: string
   daily_rate: number
+  department?: string
+  position?: string
 }
 
 interface PayrollPeriod {
@@ -145,7 +159,7 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false)
   const [isBulkAddModalOpen, setIsBulkAddModalOpen] = useState(false)
   const [selectedAttendance, setSelectedAttendance] = useState<Attendance | null>(null)
-  const [activeTab, setActiveTab] = useState<"all" | "daily" | "summary" | "analytics">("all")
+  const [activeTab, setActiveTab] = useState<"all" | "daily" | "summary" | "analytics" | "period">("all")
   const [sortField, setSortField] = useState<string>("work_date")
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc")
   const [isLoading, setIsLoading] = useState(true)
@@ -160,6 +174,38 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
   const [isDragging, setIsDragging] = useState(false)
   const [draggedAttendance, setDraggedAttendance] = useState(null)
   const [debugInfo, setDebugInfo] = useState<string>("")
+  const [overwriteExisting, setOverwriteExisting] = useState(false)
+
+  // New state for period view
+  const [selectedPeriodForView, setSelectedPeriodForView] = useState<string>("")
+  const [selectedEmployeeForView, setSelectedEmployeeForView] = useState<string>("all")
+  const [periodAttendanceRecords, setPeriodAttendanceRecords] = useState<Attendance[]>([])
+  const [isPeriodLoading, setIsPeriodLoading] = useState(false)
+
+  // Edit attendance dialog
+  const [showEditDialog, setShowEditDialog] = useState(false)
+  const [editRecord, setEditRecord] = useState<Attendance | null>(null)
+
+  // Bulk update dialog
+  const [showBulkDialog, setShowBulkDialog] = useState(false)
+  const [bulkStatus, setBulkStatus] = useState<string>("Present")
+  const [bulkDate, setBulkDate] = useState<string>(new Date().toISOString().split("T")[0])
+
+  // Date filters for different tabs
+  const [summaryDateFilter, setSummaryDateFilter] = useState<string>(new Date().toISOString().split("T")[0])
+  const [dailyViewDateFilter, setDailyViewDateFilter] = useState<string>("")
+  const [analyticsDateRange, setAnalyticsDateRange] = useState<{
+    startDate: string
+    endDate: string
+  }>(() => {
+    const today = new Date()
+    const oneWeekAgo = subDays(today, 6)
+    return {
+      startDate: oneWeekAgo.toISOString().split("T")[0],
+      endDate: today.toISOString().split("T")[0],
+    }
+  })
+  const [periodDateFilter, setPeriodDateFilter] = useState<string>("")
 
   // Use actual data
   const attendanceData = attendances || []
@@ -181,26 +227,24 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
   // Generate weekly attendance data for analytics
   useEffect(() => {
     if (attendanceData.length > 0) {
-      // Get the current date
-      const today = new Date()
+      // Use the analytics date range for filtering
+      const startDate = new Date(analyticsDateRange.startDate)
+      const endDate = new Date(analyticsDateRange.endDate)
 
-      // Calculate the start of the current week (Monday)
-      const startOfWeek = new Date(today)
-      const day = startOfWeek.getDay()
-      const diff = startOfWeek.getDate() - day + (day === 0 ? -6 : 1)
-      startOfWeek.setDate(diff)
-      startOfWeek.setHours(0, 0, 0, 0)
+      // Calculate the number of days in the range
+      const dayDiff = Math.floor((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1
+      const numDays = Math.min(dayDiff, 14) // Limit to 14 days to avoid too many data points
 
-      // Generate labels for the last 7 days
+      // Generate labels and data for the selected date range
       const labels = []
       const data = []
 
-      for (let i = 0; i < 7; i++) {
-        const date = new Date(startOfWeek)
-        date.setDate(startOfWeek.getDate() + i)
+      for (let i = 0; i < numDays; i++) {
+        const date = new Date(startDate)
+        date.setDate(startDate.getDate() + i)
 
-        // Format date as "Mon", "Tue", etc.
-        const dayLabel = date.toLocaleDateString("en-US", { weekday: "short" })
+        // Format date as "Mon, DD"
+        const dayLabel = format(date, "EEE, dd")
         labels.push(dayLabel)
 
         // Count present employees for this day
@@ -219,7 +263,7 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
       setWeeklyLabels(labels)
       setWeeklyAttendanceData(data)
     }
-  }, [attendanceData, employees])
+  }, [attendanceData, employees, analyticsDateRange])
 
   // Simulate loading state
   useEffect(() => {
@@ -244,6 +288,93 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
   const openBulkAddModal = () => setIsBulkAddModalOpen(true)
   const closeBulkAddModal = () => setIsBulkAddModalOpen(false)
 
+  // Format date for display
+  const formatDate = (dateString: string) => {
+    if (!dateString) return ""
+    try {
+      const date = parseISO(dateString)
+      if (!isValid(date)) return dateString
+      return format(date, "EEE, MMM d, yyyy")
+    } catch (e) {
+      return dateString
+    }
+  }
+
+  // Format time for display
+  const formatTime = (timeString: string) => {
+    if (!timeString) return ""
+    try {
+      // If it's a full ISO string, extract just the time part
+      if (timeString.includes("T")) {
+        const date = parseISO(timeString)
+        if (!isValid(date)) return timeString
+        return format(date, "h:mm a")
+      }
+
+      // If it's just a time string (HH:MM:SS)
+      const [hours, minutes] = timeString.split(":").map(Number)
+      const date = new Date()
+      date.setHours(hours, minutes)
+      return format(date, "h:mm a")
+    } catch (e) {
+      return timeString
+    }
+  }
+
+  // Load attendance records for period view
+  const loadPeriodAttendanceRecords = () => {
+    if (!selectedPeriodForView) {
+      setPeriodAttendanceRecords([])
+      return
+    }
+
+    setIsPeriodLoading(true)
+
+    const params: Record<string, string> = { period_id: selectedPeriodForView }
+    if (selectedEmployeeForView && selectedEmployeeForView !== "all") {
+      params.employee_id = selectedEmployeeForView
+    }
+
+    // Use the existing attendance data if it matches the criteria
+    // In a real app, you would make an API call here
+    const selectedPeriod = payrollPeriods.find((p) => p.id.toString() === selectedPeriodForView)
+
+    if (selectedPeriod) {
+      const periodStart = new Date(selectedPeriod.period_start)
+      const periodEnd = new Date(selectedPeriod.period_end)
+
+      const filteredRecords = attendanceData.filter((record) => {
+        const recordDate = new Date(record.work_date || record.date)
+        const matchesDate = recordDate >= periodStart && recordDate <= periodEnd
+
+        // Apply additional date filter if set
+        const matchesPeriodDateFilter = periodDateFilter
+          ? record.work_date === periodDateFilter || record.date === periodDateFilter
+          : true
+
+        const matchesEmployee =
+          selectedEmployeeForView === "all" ||
+          record.employee_id?.toString() === selectedEmployeeForView ||
+          employees.find((e) => e.employee_number === record.employee_number)?.id.toString() === selectedEmployeeForView
+
+        return matchesDate && matchesEmployee && matchesPeriodDateFilter
+      })
+
+      setPeriodAttendanceRecords(filteredRecords)
+      setIsPeriodLoading(false)
+    } else {
+      setPeriodAttendanceRecords([])
+      setIsPeriodLoading(false)
+    }
+  }
+
+  // Effect to load period records when selection changes
+  useEffect(() => {
+    if (activeTab === "period") {
+      loadPeriodAttendanceRecords()
+    }
+  }, [selectedPeriodForView, selectedEmployeeForView, periodDateFilter, activeTab])
+
   const handleAddAttendance = (data: any) => {
     // Ensure we're using work_date instead of date
     const formattedData = {
@@ -257,6 +388,7 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
     }
 
     router.post("/attendance", formattedData, {
+      preserveScroll: true, // Add this to prevent scrolling to top
       onSuccess: () => {
         toast.success("Attendance added successfully!")
         closeAddModal()
@@ -284,6 +416,7 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
     }
 
     router.put(`/attendance/${data.id}`, formattedData, {
+      preserveScroll: true, // Add this to prevent scrolling to top
       onSuccess: () => {
         toast.success("Attendance updated successfully!")
         closeUpdateModal()
@@ -301,6 +434,7 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
   const handleDeleteAttendance = (id: number) => {
     if (confirm("Are you sure you want to delete this attendance record?")) {
       router.delete(`/attendance/${id}`, {
+        preserveScroll: true, // Add this to prevent scrolling to top
         onSuccess: () => {
           toast.success("Attendance deleted successfully!")
           refreshData()
@@ -320,6 +454,7 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
     formData.append("file", file)
 
     router.post("/attendance/bulk-upload", formData, {
+      preserveScroll: true, // Add this to prevent scrolling to top
       onSuccess: () => {
         toast.success("Attendance records uploaded successfully!")
         closeBulkAddModal()
@@ -339,6 +474,7 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
       "/attendance/bulk",
       { work_date: date, employee_numbers: employeeNumbers, status },
       {
+        preserveScroll: true, // Add this to prevent scrolling to top
         onSuccess: () => {
           toast.success("Attendance records added successfully!")
           closeBulkAddModal()
@@ -354,49 +490,118 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
     )
   }
 
+  // Handle edit record
+  const handleEditRecord = (record: Attendance) => {
+    setEditRecord({ ...record })
+    setShowEditDialog(true)
+  }
+
+  // Save edited record
+  const saveEditedRecord = () => {
+    if (!editRecord) return
+
+    handleUpdateAttendance(editRecord)
+    setShowEditDialog(false)
+  }
+
+  // Handle bulk update
+  const handleBulkUpdate = () => {
+    if (!bulkDate || !bulkStatus) {
+      toast.error("Please select a date and status")
+      return
+    }
+
+    router.post(
+      "/attendance/bulk-update",
+      {
+        date: bulkDate,
+        status: bulkStatus,
+        employee_id: selectedEmployeeForView !== "all" ? selectedEmployeeForView : undefined,
+      },
+      {
+        preserveScroll: true, // Add this to prevent scrolling to top
+        onSuccess: () => {
+          toast.success("Attendance records updated successfully!")
+          setShowBulkDialog(false)
+          refreshData()
+        },
+        onError: (errors) => {
+          toast.error("Failed to update attendance records")
+          console.error(errors)
+        },
+      },
+    )
+  }
+
   // Generate payroll from attendance
   const handleGeneratePayroll = () => {
     if (!selectedPayrollPeriod) {
       toast.error("Please select a payroll period")
       return
     }
-  
+
     setIsGeneratingPayroll(true)
-  
-    router.post(
-      "/payroll/generate-from-attendance",
-      { payroll_period_id: selectedPayrollPeriod },
-      {
-        onSuccess: () => {
-          toast.success("Payroll generated successfully!")
-          setShowGeneratePayrollDialog(false)
-          setSelectedPayrollPeriod("")
-          // Redirect to payroll page to see the generated entries
-          router.get(`/payroll?period=${selectedPayrollPeriod}`)
-        },
-        onError: (errorResponse) => {
-          console.error("Generate payroll error response:", errorResponse)
-  
-          if (errorResponse?.errors) {
-            // Laravel validation errors
-            Object.values(errorResponse.errors).flat().forEach((message) => {
+
+    // Get the selected period details
+    const selectedPeriod = payrollPeriods.find((p) => p.id.toString() === selectedPayrollPeriod)
+    if (!selectedPeriod) {
+      toast.error("Invalid payroll period selected")
+      setIsGeneratingPayroll(false)
+      return
+    }
+
+    // Get all attendance records for the selected period
+    const periodStart = new Date(selectedPeriod.period_start)
+    const periodEnd = new Date(selectedPeriod.period_end)
+
+    // Filter attendance records for this period
+    const periodAttendance = attendanceData.filter((record) => {
+      const recordDate = new Date(record.work_date || record.date)
+      return recordDate >= periodStart && recordDate <= periodEnd
+    })
+
+    // Prepare the payload with attendance data
+    const payload = {
+      payroll_period_id: selectedPayrollPeriod,
+      include_daily_rates: true,
+      respect_attendance_status: true,
+      attendance_records: periodAttendance, // Include the actual attendance records
+      overwrite_existing: overwriteExisting, // Add flag to overwrite existing records
+    }
+
+    router.post("/payroll/generate-from-attendance", payload, {
+      preserveScroll: true, // Add this to prevent scrolling to top
+      onSuccess: () => {
+        toast.success("Payroll generated successfully!")
+        setShowGeneratePayrollDialog(false)
+        setSelectedPayrollPeriod("")
+        setOverwriteExisting(false)
+        // Redirect to payroll page to see the generated entries
+        router.get(`/payroll?period=${selectedPayrollPeriod}`)
+      },
+      onError: (errorResponse) => {
+        console.error("Generate payroll error response:", errorResponse)
+
+        if (errorResponse?.errors) {
+          // Laravel validation errors
+          Object.values(errorResponse.errors)
+            .flat()
+            .forEach((message) => {
               toast.error(`Error: ${message}`)
             })
-          } else if (errorResponse?.message) {
-            // Generic error message
-            toast.error(`Error: ${errorResponse.message}`)
-          } else {
-            // Fallback error message
-            toast.error("An unexpected error occurred while generating payroll.")
-          }
-        },
-        onFinish: () => {
-          setIsGeneratingPayroll(false)
-        },
-      }
-    )
+        } else if (errorResponse?.message) {
+          // Generic error message
+          toast.error(`Error: ${errorResponse.message}`)
+        } else {
+          // Fallback error message
+          toast.error("An unexpected error occurred while generating payroll.")
+        }
+      },
+      onFinish: () => {
+        setIsGeneratingPayroll(false)
+      },
+    })
   }
-  
 
   // Handle drag start for attendance status
   const handleDragStart = (e, attendance) => {
@@ -438,8 +643,28 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
         return "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/20 dark:text-blue-400 dark:border-blue-800"
       case "Holiday":
         return "bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-900/20 dark:text-purple-400 dark:border-purple-800"
+      case "Half Day":
+        return "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-800"
+      case "Leave":
+        return "bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-900/20 dark:text-indigo-400 dark:border-indigo-800"
       default:
         return "bg-slate-50 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700"
+    }
+  }
+
+  // Get status icon
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case "Present":
+        return <Check className="h-4 w-4 text-green-500" />
+      case "Absent":
+        return <X className="h-4 w-4 text-red-500" />
+      case "Half Day":
+        return <AlertCircle className="h-4 w-4 text-amber-500" />
+      case "Day Off":
+        return <Clock className="h-4 w-4 text-blue-500" />
+      default:
+        return null
     }
   }
 
@@ -449,6 +674,27 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
 
     // Use a direct download approach with the correct URL
     window.location.href = "/attendance/export"
+  }
+
+  // Calculate pay amount based on status and daily rate
+  const calculatePayAmount = (record: Attendance) => {
+    const dailyRate = Number.parseFloat(record.daily_rate?.toString() || "0") || 0
+
+    switch (record.status) {
+      case "Present":
+        return dailyRate
+      case "Half Day":
+        return dailyRate / 2
+      case "Absent":
+      case "Day Off":
+        return 0
+      case "Holiday":
+        return dailyRate // Usually paid for holidays
+      case "Leave":
+        return dailyRate // Paid leave
+      default:
+        return dailyRate
+    }
   }
 
   // Filter and sort attendances
@@ -508,10 +754,10 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
     setDateFilter(null)
   }
 
-  // Refresh data
   const refreshData = () => {
     setIsRefreshing(true)
     router.reload({
+      preserveScroll: true, // Add this to prevent scrolling to top
       onSuccess: () => {
         setIsRefreshing(false)
         toast.success("Data refreshed successfully")
@@ -523,29 +769,40 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
     })
   }
 
-  // Calculate summary statistics
+  // Update the calculateSummary function to filter by date
   const calculateSummary = () => {
+    // Filter attendance records by the selected date if a date is selected
+    const filteredByDate = summaryDateFilter
+      ? attendanceData.filter((a) => a.work_date === summaryDateFilter)
+      : attendanceData
+
     let totalDailyRate = 0
     let totalAdjustments = 0
+    let totalPayAmount = 0
 
     // Ensure we're working with numbers
-    attendanceData.forEach((a) => {
+    filteredByDate.forEach((a) => {
       // Convert to number and default to 0 if NaN
-      const dailyRate = Number.parseFloat(a.daily_rate) || 0
-      const adjustment = Number.parseFloat(a.adjustment) || 0
+      const dailyRate = Number.parseFloat(a.daily_rate?.toString() || "0") || 0
+      const adjustment = Number.parseFloat(a.adjustment?.toString() || "0") || 0
+      const payAmount = calculatePayAmount(a)
 
       totalDailyRate += dailyRate
       totalAdjustments += adjustment
+      totalPayAmount += payAmount
     })
 
     return {
-      totalRecords: attendanceData.length,
-      presentCount: attendanceData.filter((a) => a.status === "Present").length,
-      absentCount: attendanceData.filter((a) => a.status === "Absent").length,
-      dayOffCount: attendanceData.filter((a) => a.status === "Day Off").length,
-      holidayCount: attendanceData.filter((a) => a.status === "Holiday").length,
+      totalRecords: filteredByDate.length,
+      presentCount: filteredByDate.filter((a) => a.status === "Present").length,
+      absentCount: filteredByDate.filter((a) => a.status === "Absent").length,
+      dayOffCount: filteredByDate.filter((a) => a.status === "Day Off").length,
+      holidayCount: filteredByDate.filter((a) => a.status === "Holiday").length,
+      halfDayCount: filteredByDate.filter((a) => a.status === "Half Day").length,
+      leaveCount: filteredByDate.filter((a) => a.status === "Leave").length,
       totalDailyRate: totalDailyRate,
       totalAdjustments: totalAdjustments,
+      totalPayAmount: totalPayAmount,
     }
   }
 
@@ -567,16 +824,19 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
     return grouped
   }, [attendanceData])
 
-  // Format date for display
-  const formatDate = (dateString: string) => {
-    if (!dateString) return "Invalid Date"
-    return new Date(dateString).toLocaleDateString("en-US", {
-      weekday: "short",
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    })
-  }
+  // Filter daily view by date
+  const filteredAttendanceByDate = useMemo(() => {
+    if (!dailyViewDateFilter) {
+      return attendanceByDate
+    }
+
+    // If date filter is set, only return that specific date
+    const filtered = {}
+    if (attendanceByDate[dailyViewDateFilter]) {
+      filtered[dailyViewDateFilter] = attendanceByDate[dailyViewDateFilter]
+    }
+    return filtered
+  }, [attendanceByDate, dailyViewDateFilter])
 
   // Calculate weekly attendance completion
   const calculateWeeklyCompletion = () => {
@@ -628,6 +888,51 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
     }
 
     return "No upcoming payroll dates"
+  }
+
+  // Set analytics date range to previous week
+  const setPreviousWeek = () => {
+    const startDate = new Date(analyticsDateRange.startDate)
+    const endDate = new Date(analyticsDateRange.endDate)
+
+    const newStartDate = subDays(startDate, 7)
+    const newEndDate = subDays(endDate, 7)
+
+    setAnalyticsDateRange({
+      startDate: newStartDate.toISOString().split("T")[0],
+      endDate: newEndDate.toISOString().split("T")[0],
+    })
+  }
+
+  // Set analytics date range to next week
+  const setNextWeek = () => {
+    const startDate = new Date(analyticsDateRange.startDate)
+    const endDate = new Date(analyticsDateRange.endDate)
+
+    const newStartDate = addDays(startDate, 7)
+    const newEndDate = addDays(endDate, 7)
+
+    // Don't allow future dates beyond today
+    const today = new Date()
+    if (newEndDate > today) {
+      return
+    }
+
+    setAnalyticsDateRange({
+      startDate: newStartDate.toISOString().split("T")[0],
+      endDate: newEndDate.toISOString().split("T")[0],
+    })
+  }
+
+  // Set analytics date range to current week
+  const setCurrentWeek = () => {
+    const today = new Date()
+    const oneWeekAgo = subDays(today, 6)
+
+    setAnalyticsDateRange({
+      startDate: oneWeekAgo.toISOString().split("T")[0],
+      endDate: today.toISOString().split("T")[0],
+    })
   }
 
   // Function to add sample attendance data for testing
@@ -719,6 +1024,14 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
             <Button onClick={openBulkAddModal} className="bg-indigo-600 hover:bg-indigo-700 text-white">
               <Users className="h-4 w-4 mr-1" />
               Bulk Add
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => setShowBulkDialog(true)}
+              className="border-amber-200 text-amber-600 hover:border-amber-300 dark:border-amber-800 dark:text-amber-400 dark:hover:border-amber-700"
+            >
+              <Calendar className="h-4 w-4 mr-1" />
+              Bulk Update
             </Button>
             <Button
               variant="outline"
@@ -906,6 +1219,8 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
                 <option value="Absent">Absent</option>
                 <option value="Day Off">Day Off</option>
                 <option value="Holiday">Holiday</option>
+                <option value="Half Day">Half Day</option>
+                <option value="Leave">Leave</option>
               </select>
               <input
                 type="date"
@@ -970,16 +1285,16 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
           </div>
 
           <div
-            className={`p-4 rounded-lg border-2 border-dashed ${isDragging ? "border-purple-500 bg-purple-50 dark:bg-purple-900/10" : "border-slate-200 dark:border-slate-700"}`}
+            className={`p-4 rounded-lg border-2 border-dashed ${isDragging ? "border-amber-500 bg-amber-50 dark:bg-amber-900/10" : "border-slate-200 dark:border-slate-700"}`}
             onDragOver={handleDragOver}
-            onDrop={(e) => handleDrop(e, "Holiday")}
+            onDrop={(e) => handleDrop(e, "Half Day")}
           >
             <div className="flex items-center mb-2">
-              <div className="w-3 h-3 rounded-full bg-purple-500 mr-2"></div>
-              <h3 className="font-medium">Holiday</h3>
+              <div className="w-3 h-3 rounded-full bg-amber-500 mr-2"></div>
+              <h3 className="font-medium">Half Day</h3>
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Drag and drop attendance records here to mark as Holiday
+              Drag and drop attendance records here to mark as Half Day
             </p>
           </div>
         </div>
@@ -989,6 +1304,7 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
           <TabsList className="mb-4">
             <TabsTrigger value="all">All Records</TabsTrigger>
             <TabsTrigger value="daily">Daily View</TabsTrigger>
+            <TabsTrigger value="period">Period View</TabsTrigger>
             <TabsTrigger value="summary">Summary</TabsTrigger>
             <TabsTrigger value="analytics">Analytics</TabsTrigger>
           </TabsList>
@@ -1050,6 +1366,7 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
                             )}
                           </div>
                         </th>
+                        <th className="py-3 px-4 text-left font-semibold">Pay Amount</th>
                         <th
                           className="py-3 px-4 text-left font-semibold cursor-pointer"
                           onClick={() => toggleSort("adjustment")}
@@ -1066,73 +1383,82 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
                     </thead>
                     <tbody>
                       {paginatedAttendances.length > 0 ? (
-                        paginatedAttendances.map((attendance) => (
-                          <tr
-                            key={attendance.id}
-                            className="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/50"
-                            draggable
-                            onDragStart={(e) => handleDragStart(e, attendance)}
-                          >
-                            <td className="py-3 px-4 font-medium">#{attendance.id}</td>
-                            <td className="py-3 px-4">{attendance.employee_number}</td>
-                            <td className="py-3 px-4">{attendance.full_name || "N/A"}</td>
-                            <td className="py-3 px-4">{formatDate(attendance.work_date || attendance.date)}</td>
-                            <td className="py-3 px-4">
-                              <Badge className={getStatusBadgeColor(attendance.status)}>{attendance.status}</Badge>
-                            </td>
-                            <td className="py-3 px-4">₱{Number.parseFloat(attendance.daily_rate).toFixed(2)}</td>
-                            <td className="py-3 px-4">₱{Number.parseFloat(attendance.adjustment).toFixed(2)}</td>
-                            <td className="py-3 px-4 space-x-1">
-                              <TooltipProvider>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      className="border-slate-200 text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:text-slate-400 dark:hover:border-slate-600"
-                                      onClick={() => openUpdateModal(attendance)}
-                                    >
-                                      Edit
-                                    </Button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>Edit Attendance</TooltipContent>
-                                </Tooltip>
-                              </TooltipProvider>
+                        paginatedAttendances.map((attendance) => {
+                          const payAmount = calculatePayAmount(attendance)
 
-                              <TooltipProvider>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <Button
-                                      variant="outline"
-                                      size="icon"
-                                      className="h-8 w-8 border-red-200 text-red-600 hover:border-red-300 dark:border-red-800 dark:text-red-400 dark:hover:border-red-700"
-                                      onClick={() => handleDeleteAttendance(attendance.id)}
-                                    >
-                                      <svg
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        strokeWidth="2"
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                        className="h-3.5 w-3.5"
+                          return (
+                            <tr
+                              key={attendance.id}
+                              className="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/50"
+                              draggable
+                              onDragStart={(e) => handleDragStart(e, attendance)}
+                            >
+                              <td className="py-3 px-4 font-medium">#{attendance.id}</td>
+                              <td className="py-3 px-4">{attendance.employee_number}</td>
+                              <td className="py-3 px-4">{attendance.full_name || "N/A"}</td>
+                              <td className="py-3 px-4">{formatDate(attendance.work_date || attendance.date)}</td>
+                              <td className="py-3 px-4">
+                                <Badge className={getStatusBadgeColor(attendance.status)}>{attendance.status}</Badge>
+                              </td>
+                              <td className="py-3 px-4">
+                                ₱{Number.parseFloat(attendance.daily_rate?.toString() || "0").toFixed(2)}
+                              </td>
+                              <td className="py-3 px-4">₱{payAmount.toFixed(2)}</td>
+                              <td className="py-3 px-4">
+                                ₱{Number.parseFloat(attendance.adjustment?.toString() || "0").toFixed(2)}
+                              </td>
+                              <td className="py-3 px-4 space-x-1">
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="border-slate-200 text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:text-slate-400 dark:hover:border-slate-600"
+                                        onClick={() => openUpdateModal(attendance)}
                                       >
-                                        <path d="M3 6h18"></path>
-                                        <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path>
-                                        <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
-                                      </svg>
-                                    </Button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>Delete Attendance</TooltipContent>
-                                </Tooltip>
-                              </TooltipProvider>
-                            </td>
-                          </tr>
-                        ))
+                                        Edit
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>Edit Attendance</TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
+
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Button
+                                        variant="outline"
+                                        size="icon"
+                                        className="h-8 w-8 border-red-200 text-red-600 hover:border-red-300 dark:border-red-800 dark:text-red-400 dark:hover:border-red-700"
+                                        onClick={() => handleDeleteAttendance(attendance.id)}
+                                      >
+                                        <svg
+                                          xmlns="http://www.w3.org/2000/svg"
+                                          viewBox="0 0 24 24"
+                                          fill="none"
+                                          stroke="currentColor"
+                                          strokeWidth="2"
+                                          strokeLinecap="round"
+                                          strokeLinejoin="round"
+                                          className="h-3.5 w-3.5"
+                                        >
+                                          <path d="M3 6h18"></path>
+                                          <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path>
+                                          <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
+                                        </svg>
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>Delete Attendance</TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
+                              </td>
+                            </tr>
+                          )
+                        })
                       ) : (
                         <tr>
-                          <td colSpan={8} className="py-8 text-center text-slate-500 dark:text-slate-400">
+                          <td colSpan={9} className="py-8 text-center text-slate-500 dark:text-slate-400">
                             No attendance records found matching your filters.
                           </td>
                         </tr>
@@ -1220,13 +1546,52 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
           </TabsContent>
 
           <TabsContent value="daily" className="mt-0">
+            {/* Daily View Date Filter */}
+            <Card className="p-4 mb-6 border border-slate-200 dark:border-slate-700">
+              <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
+                <h3 className="text-lg font-semibold">Daily Attendance View</h3>
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="daily-date" className="whitespace-nowrap">
+                    Filter by Date:
+                  </Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      id="daily-date"
+                      type="date"
+                      value={dailyViewDateFilter}
+                      onChange={(e) => setDailyViewDateFilter(e.target.value)}
+                      className="w-auto"
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setDailyViewDateFilter(new Date().toISOString().split("T")[0])}
+                      className="whitespace-nowrap"
+                    >
+                      <Calendar className="h-4 w-4 mr-1" />
+                      Today
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setDailyViewDateFilter("")}
+                      className="whitespace-nowrap"
+                    >
+                      <Filter className="h-4 w-4 mr-1" />
+                      All Dates
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </Card>
+
             {isLoading ? (
               <div className="flex justify-center items-center h-64">
                 <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-indigo-500"></div>
               </div>
-            ) : Object.keys(attendanceByDate).length > 0 ? (
+            ) : Object.keys(filteredAttendanceByDate).length > 0 ? (
               <div className="space-y-6">
-                {Object.keys(attendanceByDate)
+                {Object.keys(filteredAttendanceByDate)
                   .sort((a, b) => (new Date(b) as any) - (new Date(a) as any))
                   .map((date) => (
                     <Card key={date} className="p-4 border border-slate-200 dark:border-slate-700">
@@ -1245,6 +1610,9 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
                                 Daily Rate
                               </th>
                               <th className="py-2 px-4 text-left font-medium text-slate-600 dark:text-slate-300">
+                                Pay Amount
+                              </th>
+                              <th className="py-2 px-4 text-left font-medium text-slate-600 dark:text-slate-300">
                                 Adjustment
                               </th>
                               <th className="py-2 px-4 text-left font-medium text-slate-600 dark:text-slate-300">
@@ -1253,46 +1621,57 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
                             </tr>
                           </thead>
                           <tbody>
-                            {attendanceByDate[date].map((attendance) => (
-                              <tr
-                                key={attendance.id}
-                                className="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/50"
-                                draggable
-                                onDragStart={(e) => handleDragStart(e, attendance)}
-                              >
-                                <td className="py-2 px-4">
-                                  <div>
-                                    <p className="font-medium">{attendance.full_name || "N/A"}</p>
-                                    <p className="text-xs text-slate-500 dark:text-slate-400">
-                                      {attendance.employee_number}
-                                    </p>
-                                  </div>
-                                </td>
-                                <td className="py-2 px-4">
-                                  <Badge className={getStatusBadgeColor(attendance.status)}>{attendance.status}</Badge>
-                                </td>
-                                <td className="py-2 px-4">₱{Number.parseFloat(attendance.daily_rate).toFixed(2)}</td>
-                                <td className="py-2 px-4">₱{Number.parseFloat(attendance.adjustment).toFixed(2)}</td>
-                                <td className="py-2 px-4 space-x-1">
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    className="border-slate-200 text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:text-slate-400 dark:hover:border-slate-600"
-                                    onClick={() => openUpdateModal(attendance)}
-                                  >
-                                    Edit
-                                  </Button>
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    className="border-red-200 text-red-600 hover:border-red-300 dark:border-red-800 dark:text-red-400 dark:hover:border-red-700"
-                                    onClick={() => handleDeleteAttendance(attendance.id)}
-                                  >
-                                    Delete
-                                  </Button>
-                                </td>
-                              </tr>
-                            ))}
+                            {filteredAttendanceByDate[date].map((attendance) => {
+                              const payAmount = calculatePayAmount(attendance)
+
+                              return (
+                                <tr
+                                  key={attendance.id}
+                                  className="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/50"
+                                  draggable
+                                  onDragStart={(e) => handleDragStart(e, attendance)}
+                                >
+                                  <td className="py-2 px-4">
+                                    <div>
+                                      <p className="font-medium">{attendance.full_name || "N/A"}</p>
+                                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                                        {attendance.employee_number}
+                                      </p>
+                                    </div>
+                                  </td>
+                                  <td className="py-2 px-4">
+                                    <Badge className={getStatusBadgeColor(attendance.status)}>
+                                      {attendance.status}
+                                    </Badge>
+                                  </td>
+                                  <td className="py-2 px-4">
+                                    ₱{Number.parseFloat(attendance.daily_rate?.toString() || "0").toFixed(2)}
+                                  </td>
+                                  <td className="py-2 px-4">₱{payAmount.toFixed(2)}</td>
+                                  <td className="py-2 px-4">
+                                    ₱{Number.parseFloat(attendance.adjustment?.toString() || "0").toFixed(2)}
+                                  </td>
+                                  <td className="py-2 px-4 space-x-1">
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="border-slate-200 text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:text-slate-400 dark:hover:border-slate-600"
+                                      onClick={() => openUpdateModal(attendance)}
+                                    >
+                                      Edit
+                                    </Button>
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="border-red-200 text-red-600 hover:border-red-300 dark:border-red-800 dark:text-red-400 dark:hover:border-red-700"
+                                      onClick={() => handleDeleteAttendance(attendance.id)}
+                                    >
+                                      Delete
+                                    </Button>
+                                  </td>
+                                </tr>
+                              )
+                            })}
                           </tbody>
                         </table>
                       </div>
@@ -1301,7 +1680,11 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
               </div>
             ) : (
               <div className="text-center py-12">
-                <p className="text-slate-500 dark:text-slate-400">No attendance records found.</p>
+                <p className="text-slate-500 dark:text-slate-400">
+                  {dailyViewDateFilter
+                    ? `No attendance records found for ${formatDate(dailyViewDateFilter)}.`
+                    : "No attendance records found."}
+                </p>
                 <Button
                   variant="outline"
                   onClick={openAddModal}
@@ -1314,10 +1697,223 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
             )}
           </TabsContent>
 
+          {/* Period View Tab - New */}
+          <TabsContent value="period" className="mt-0">
+            <Card className="p-4 mb-6 border border-slate-200 dark:border-slate-700">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div>
+                  <Label htmlFor="periodSelect">Payroll Period</Label>
+                  <Select value={selectedPeriodForView} onValueChange={setSelectedPeriodForView}>
+                    <SelectTrigger id="periodSelect" className="mt-1">
+                      <SelectValue placeholder="Select period" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {payrollPeriods.map((period) => (
+                        <SelectItem key={period.id} value={period.id.toString()}>
+                          {formatDate(period.period_start)} to {formatDate(period.period_end)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <Label htmlFor="employeeSelect">Employee (Optional)</Label>
+                  <Select value={selectedEmployeeForView} onValueChange={setSelectedEmployeeForView}>
+                    <SelectTrigger id="employeeSelect" className="mt-1">
+                      <SelectValue placeholder="All employees" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All employees</SelectItem>
+                      {employees.map((employee) => (
+                        <SelectItem key={employee.id} value={employee.id.toString()}>
+                          {employee.full_name} ({employee.employee_number})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <Label htmlFor="periodDateFilter">Date Filter (Optional)</Label>
+                  <div className="flex gap-2 mt-1">
+                    <Input
+                      id="periodDateFilter"
+                      type="date"
+                      value={periodDateFilter}
+                      onChange={(e) => setPeriodDateFilter(e.target.value)}
+                      className="flex-1"
+                    />
+                    {periodDateFilter && (
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        onClick={() => setPeriodDateFilter("")}
+                        className="h-10 w-10"
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-end">
+                  <Button
+                    onClick={loadPeriodAttendanceRecords}
+                    disabled={!selectedPeriodForView || isPeriodLoading}
+                    className="w-full"
+                  >
+                    {isPeriodLoading ? "Loading..." : "Load Records"}
+                  </Button>
+                </div>
+              </div>
+            </Card>
+
+            {isPeriodLoading ? (
+              <div className="flex justify-center items-center h-64">
+                <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-indigo-500"></div>
+              </div>
+            ) : selectedPeriodForView ? (
+              <>
+                {periodAttendanceRecords.length > 0 ? (
+                  <div className="border rounded-lg overflow-hidden">
+                    <table className="min-w-full border-collapse text-sm">
+                      <thead className="sticky top-0 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                        <tr>
+                          <th className="py-3 px-4 text-left font-semibold">Date</th>
+                          <th className="py-3 px-4 text-left font-semibold">Employee</th>
+                          <th className="py-3 px-4 text-left font-semibold">Status</th>
+                          <th className="py-3 px-4 text-left font-semibold">Time In</th>
+                          <th className="py-3 px-4 text-left font-semibold">Time Out</th>
+                          <th className="py-3 px-4 text-left font-semibold">Daily Rate</th>
+                          <th className="py-3 px-4 text-left font-semibold">Pay Amount</th>
+                          <th className="py-3 px-4 text-left font-semibold">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {periodAttendanceRecords.map((record) => {
+                          const employee = employees.find(
+                            (e) => e.id === record.employee_id || e.employee_number === record.employee_number,
+                          )
+                          const payAmount = calculatePayAmount(record)
+
+                          return (
+                            <tr
+                              key={record.id || `${record.employee_id}-${record.work_date}`}
+                              className="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/50"
+                            >
+                              <td className="py-3 px-4">{formatDate(record.work_date || record.date)}</td>
+                              <td className="py-3 px-4">
+                                {record.full_name ||
+                                  employee?.full_name ||
+                                  `Employee #${record.employee_id || record.employee_number}`}
+                              </td>
+                              <td className="py-3 px-4">
+                                <div
+                                  className={`inline-flex items-center px-2 py-1 rounded-full text-xs ${getStatusBadgeColor(record.status)}`}
+                                >
+                                  {getStatusIcon(record.status)}
+                                  <span className="ml-1">{record.status}</span>
+                                </div>
+                              </td>
+                              <td className="py-3 px-4">{record.time_in ? formatTime(record.time_in) : "-"}</td>
+                              <td className="py-3 px-4">{record.time_out ? formatTime(record.time_out) : "-"}</td>
+                              <td className="py-3 px-4">
+                                ₱{Number.parseFloat(record.daily_rate?.toString() || "0").toFixed(2)}
+                              </td>
+                              <td className="py-3 px-4">₱{payAmount.toFixed(2)}</td>
+                              <td className="py-3 px-4">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleEditRecord(record)}
+                                  className="h-8 px-2"
+                                >
+                                  Edit
+                                </Button>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="text-center py-12">
+                    <p className="text-slate-500 dark:text-slate-400">
+                      {periodDateFilter
+                        ? `No attendance records found for the selected period and date (${formatDate(periodDateFilter)}).`
+                        : "No attendance records found for the selected period."}
+                    </p>
+                    <Button
+                      variant="outline"
+                      onClick={openAddModal}
+                      className="mt-4 border-indigo-200 text-indigo-600 hover:border-indigo-300 dark:border-indigo-800 dark:text-indigo-400 dark:hover:border-indigo-700"
+                    >
+                      <Plus className="h-4 w-4 mr-1" />
+                      Add Attendance Record
+                    </Button>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="text-center py-12">
+                <p className="text-slate-500 dark:text-slate-400">
+                  Please select a payroll period to view attendance records.
+                </p>
+              </div>
+            )}
+          </TabsContent>
+
           <TabsContent value="summary" className="mt-0">
+            <Card className="p-4 mb-6 border border-slate-200 dark:border-slate-700">
+              <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
+                <h3 className="text-lg font-semibold">Attendance Summary</h3>
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="summary-date" className="whitespace-nowrap">
+                    Filter by Date:
+                  </Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      id="summary-date"
+                      type="date"
+                      value={summaryDateFilter}
+                      onChange={(e) => setSummaryDateFilter(e.target.value)}
+                      className="w-auto"
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setSummaryDateFilter(new Date().toISOString().split("T")[0])}
+                      className="whitespace-nowrap"
+                    >
+                      <Calendar className="h-4 w-4 mr-1" />
+                      Today
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setSummaryDateFilter("")}
+                      className="whitespace-nowrap"
+                    >
+                      <Filter className="h-4 w-4 mr-1" />
+                      All Dates
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </Card>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <Card className="p-5 border border-slate-200 dark:border-slate-700">
-                <h3 className="text-lg font-semibold mb-4">Attendance by Status</h3>
+                <h3 className="text-lg font-semibold mb-4">
+                  Attendance by Status
+                  {summaryDateFilter && (
+                    <span className="text-sm font-normal text-slate-500 dark:text-slate-400 ml-2">
+                      for {formatDate(summaryDateFilter)}
+                    </span>
+                  )}
+                </h3>
                 <div className="space-y-3">
                   <div>
                     <div className="flex justify-between mb-1">
@@ -1415,18 +2011,82 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
                       ></div>
                     </div>
                   </div>
+                  <div>
+                    <div className="flex justify-between mb-1">
+                      <span className="text-sm font-medium">Half Day</span>
+                      <span className="text-sm text-slate-500 dark:text-slate-400">
+                        {attendanceSummary.halfDayCount} records (
+                        {attendanceSummary.totalRecords > 0
+                          ? Math.round((attendanceSummary.halfDayCount / attendanceSummary.totalRecords) * 100)
+                          : 0}
+                        %)
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2.5">
+                      <div
+                        className="bg-amber-500 h-2.5 rounded-full"
+                        style={{
+                          width: `${
+                            attendanceSummary.totalRecords > 0
+                              ? Math.round((attendanceSummary.halfDayCount / attendanceSummary.totalRecords) * 100)
+                              : 0
+                          }%`,
+                        }}
+                      ></div>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="flex justify-between mb-1">
+                      <span className="text-sm font-medium">Leave</span>
+                      <span className="text-sm text-slate-500 dark:text-slate-400">
+                        {attendanceSummary.leaveCount} records (
+                        {attendanceSummary.totalRecords > 0
+                          ? Math.round((attendanceSummary.leaveCount / attendanceSummary.totalRecords) * 100)
+                          : 0}
+                        %)
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2.5">
+                      <div
+                        className="bg-indigo-500 h-2.5 rounded-full"
+                        style={{
+                          width: `${
+                            attendanceSummary.totalRecords > 0
+                              ? Math.round((attendanceSummary.leaveCount / attendanceSummary.totalRecords) * 100)
+                              : 0
+                          }%`,
+                        }}
+                      ></div>
+                    </div>
+                  </div>
                 </div>
               </Card>
 
               <Card className="p-5 border border-slate-200 dark:border-slate-700">
-                <h3 className="text-lg font-semibold mb-4">Financial Summary</h3>
+                <h3 className="text-lg font-semibold mb-4">
+                  Financial Summary
+                  {summaryDateFilter && (
+                    <span className="text-sm font-normal text-slate-500 dark:text-slate-400 ml-2">
+                      for {formatDate(summaryDateFilter)}
+                    </span>
+                  )}
+                </h3>
                 <div className="space-y-4">
                   <div className="flex justify-between items-center">
-                    <span className="text-sm font-medium">Total Amount</span>
+                    <span className="text-sm font-medium">Total Daily Rates</span>
                     <span className="text-lg font-semibold">
                       ₱
                       {typeof attendanceSummary.totalDailyRate === "number"
                         ? attendanceSummary.totalDailyRate.toFixed(2)
+                        : "0.00"}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm font-medium">Total Pay Amount</span>
+                    <span className="text-lg font-semibold">
+                      ₱
+                      {typeof attendanceSummary.totalPayAmount === "number"
+                        ? attendanceSummary.totalPayAmount.toFixed(2)
                         : "0.00"}
                     </span>
                   </div>
@@ -1444,7 +2104,7 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
                     <span className="text-xl font-bold text-indigo-600 dark:text-indigo-400">
                       ₱
                       {(
-                        (typeof attendanceSummary.totalDailyRate === "number" ? attendanceSummary.totalDailyRate : 0) +
+                        (typeof attendanceSummary.totalPayAmount === "number" ? attendanceSummary.totalPayAmount : 0) +
                         (typeof attendanceSummary.totalAdjustments === "number"
                           ? attendanceSummary.totalAdjustments
                           : 0)
@@ -1452,14 +2112,69 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
                     </span>
                   </div>
                 </div>
+
+                {attendanceSummary.totalRecords === 0 && (
+                  <div className="mt-4 p-3 bg-slate-50 dark:bg-slate-800 rounded-md text-center text-slate-500 dark:text-slate-400">
+                    {summaryDateFilter ? (
+                      <p>No attendance records found for {formatDate(summaryDateFilter)}</p>
+                    ) : (
+                      <p>No attendance records found</p>
+                    )}
+                  </div>
+                )}
               </Card>
             </div>
           </TabsContent>
 
           <TabsContent value="analytics" className="mt-0">
+            {/* Analytics Date Range Filter */}
+            <Card className="p-4 mb-6 border border-slate-200 dark:border-slate-700">
+              <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
+                <h3 className="text-lg font-semibold">Attendance Analytics</h3>
+                <div className="flex flex-col md:flex-row items-center gap-2">
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="analytics-start-date" className="whitespace-nowrap">
+                      Date Range:
+                    </Label>
+                    <Input
+                      id="analytics-start-date"
+                      type="date"
+                      value={analyticsDateRange.startDate}
+                      onChange={(e) => setAnalyticsDateRange({ ...analyticsDateRange, startDate: e.target.value })}
+                      className="w-auto"
+                    />
+                    <span>to</span>
+                    <Input
+                      id="analytics-end-date"
+                      type="date"
+                      value={analyticsDateRange.endDate}
+                      onChange={(e) => setAnalyticsDateRange({ ...analyticsDateRange, endDate: e.target.value })}
+                      className="w-auto"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button variant="outline" size="sm" onClick={setPreviousWeek} className="whitespace-nowrap">
+                      Previous Week
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={setCurrentWeek} className="whitespace-nowrap">
+                      Current Week
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={setNextWeek} className="whitespace-nowrap">
+                      Next Week
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </Card>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <Card className="p-5 border border-slate-200 dark:border-slate-700">
-                <h3 className="text-lg font-semibold mb-4">Weekly Attendance Trends</h3>
+                <h3 className="text-lg font-semibold mb-4">
+                  Attendance Trends
+                  <span className="text-sm font-normal text-slate-500 dark:text-slate-400 ml-2">
+                    {formatDate(analyticsDateRange.startDate)} to {formatDate(analyticsDateRange.endDate)}
+                  </span>
+                </h3>
                 <div className="mt-2">
                   <SimpleChart data={weeklyAttendanceData} labels={weeklyLabels} color="#22c55e" />
                 </div>
@@ -1492,8 +2207,8 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
                     <span className="text-sm font-medium">Current Week Projection</span>
                     <span className="text-lg font-semibold">
                       ₱
-                      {typeof attendanceSummary.totalDailyRate === "number"
-                        ? attendanceSummary.totalDailyRate.toFixed(2)
+                      {typeof attendanceSummary.totalPayAmount === "number"
+                        ? attendanceSummary.totalPayAmount.toFixed(2)
                         : "0.00"}
                     </span>
                   </div>
@@ -1581,6 +2296,16 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
                   ))}
                 </select>
               </div>
+
+              <div className="flex items-center space-x-2">
+                <Checkbox id="overwrite-existing" checked={overwriteExisting} onCheckedChange={setOverwriteExisting} />
+                <label
+                  htmlFor="overwrite-existing"
+                  className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                >
+                  Overwrite existing payroll records for this period
+                </label>
+              </div>
             </div>
 
             <DialogFooter>
@@ -1594,6 +2319,183 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
               >
                 {isGeneratingPayroll ? "Generating..." : "Generate Payroll"}
               </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Edit Attendance Dialog */}
+        <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Edit Attendance Record</DialogTitle>
+              <DialogDescription>Update the attendance details for this record</DialogDescription>
+            </DialogHeader>
+
+            {editRecord && (
+              <div className="space-y-4 py-2">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="edit-date">Date</Label>
+                    <Input
+                      id="edit-date"
+                      type="date"
+                      value={editRecord.work_date || editRecord.date || ""}
+                      onChange={(e) => setEditRecord({ ...editRecord, work_date: e.target.value })}
+                      className="mt-1"
+                    />
+                  </div>
+
+                  <div>
+                    <Label htmlFor="edit-status">Status</Label>
+                    <Select
+                      value={editRecord.status}
+                      onValueChange={(value) => setEditRecord({ ...editRecord, status: value })}
+                    >
+                      <SelectTrigger id="edit-status" className="mt-1">
+                        <SelectValue placeholder="Select status" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Present">Present</SelectItem>
+                        <SelectItem value="Absent">Absent</SelectItem>
+                        <SelectItem value="Half Day">Half Day</SelectItem>
+                        <SelectItem value="Day Off">Day Off</SelectItem>
+                        <SelectItem value="Leave">Leave</SelectItem>
+                        <SelectItem value="Holiday">Holiday</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="edit-time-in">Time In</Label>
+                    <Input
+                      id="edit-time-in"
+                      type="time"
+                      value={editRecord.time_in || ""}
+                      onChange={(e) => setEditRecord({ ...editRecord, time_in: e.target.value })}
+                      className="mt-1"
+                    />
+                  </div>
+
+                  <div>
+                    <Label htmlFor="edit-time-out">Time Out</Label>
+                    <Input
+                      id="edit-time-out"
+                      type="time"
+                      value={editRecord.time_out || ""}
+                      onChange={(e) => setEditRecord({ ...editRecord, time_out: e.target.value })}
+                      className="mt-1"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="edit-daily-rate">Daily Rate</Label>
+                    <Input
+                      id="edit-daily-rate"
+                      type="number"
+                      value={editRecord.daily_rate || 0}
+                      onChange={(e) => setEditRecord({ ...editRecord, daily_rate: Number.parseFloat(e.target.value) })}
+                      className="mt-1"
+                    />
+                  </div>
+
+                  <div>
+                    <Label htmlFor="edit-adjustment">Adjustment</Label>
+                    <Input
+                      id="edit-adjustment"
+                      type="number"
+                      value={editRecord.adjustment || 0}
+                      onChange={(e) => setEditRecord({ ...editRecord, adjustment: Number.parseFloat(e.target.value) })}
+                      className="mt-1"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <Label htmlFor="edit-notes">Notes</Label>
+                  <Input
+                    id="edit-notes"
+                    value={editRecord.notes || ""}
+                    onChange={(e) => setEditRecord({ ...editRecord, notes: e.target.value })}
+                    className="mt-1"
+                  />
+                </div>
+              </div>
+            )}
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowEditDialog(false)}>
+                Cancel
+              </Button>
+              <Button onClick={saveEditedRecord}>Save Changes</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Bulk Update Dialog */}
+        <Dialog open={showBulkDialog} onOpenChange={setShowBulkDialog}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Bulk Update Attendance</DialogTitle>
+              <DialogDescription>Update attendance status for multiple employees at once</DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4 py-2">
+              <div>
+                <Label htmlFor="bulk-date">Date</Label>
+                <Input
+                  id="bulk-date"
+                  type="date"
+                  value={bulkDate}
+                  onChange={(e) => setBulkDate(e.target.value)}
+                  className="mt-1"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="bulk-status">Status</Label>
+                <Select value={bulkStatus} onValueChange={setBulkStatus}>
+                  <SelectTrigger id="bulk-status" className="mt-1">
+                    <SelectValue placeholder="Select status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Present">Present</SelectItem>
+                    <SelectItem value="Absent">Absent</SelectItem>
+                    <SelectItem value="Half Day">Half Day</SelectItem>
+                    <SelectItem value="Day Off">Day Off</SelectItem>
+                    <SelectItem value="Leave">Leave</SelectItem>
+                    <SelectItem value="Holiday">Holiday</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <Label htmlFor="bulk-employee">Employee (Optional)</Label>
+                <Select value={selectedEmployeeForView} onValueChange={setSelectedEmployeeForView}>
+                  <SelectTrigger id="bulk-employee" className="mt-1">
+                    <SelectValue placeholder="All employees" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All employees</SelectItem>
+                    {employees.map((employee) => (
+                      <SelectItem key={employee.id} value={employee.id.toString()}>
+                        {employee.full_name} ({employee.employee_number})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-slate-500 mt-1">Leave as "All employees" to update all employees</p>
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowBulkDialog(false)}>
+                Cancel
+              </Button>
+              <Button onClick={handleBulkUpdate}>Update Records</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>

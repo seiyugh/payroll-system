@@ -10,6 +10,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
+use Illuminate\Support\Facades\DB;
 
 class PayrollController extends Controller
 {
@@ -49,51 +50,91 @@ class PayrollController extends Controller
     public function generateFromAttendance(Request $request)
     {
         try {
-            // Validate request
-            $validator = Validator::make($request->all(), [
+            $validated = $request->validate([
                 'payroll_period_id' => 'required|exists:payroll_periods,id',
+                'include_daily_rates' => 'boolean',
+                'respect_attendance_status' => 'boolean',
+                'overwrite_existing' => 'boolean',
             ]);
 
-            if ($validator->fails()) {
-                return redirect()->back()->withErrors($validator)->withInput();
-            }
+            // Get the payroll period
+            $payrollPeriod = PayrollPeriod::findOrFail($validated['payroll_period_id']);
+            $overwriteExisting = $validated['overwrite_existing'] ?? false;
 
-            $payrollPeriod = PayrollPeriod::findOrFail($request->input('payroll_period_id'));
-
-            // Get all attendances within the payroll period
-            $attendances = Attendance::whereBetween('work_date', [
-                $payrollPeriod->period_start,
-                $payrollPeriod->period_end
-            ])->get();
-
-            if ($attendances->isEmpty()) {
-                return redirect()->back()->with('error', 'No attendance records found for this payroll period.');
-            }
-
-            // Get all unique employee numbers from attendance records
-            $employeeNumbers = $attendances->pluck('employee_number')->unique();
-
-            // Retrieve employees in a single query
-            $employees = Employee::whereIn('employee_number', $employeeNumbers)->get()->keyBy('employee_number');
-
-            // Process payroll for each employee
-            foreach ($attendances->groupBy('employee_number') as $employeeNumber => $employeeAttendances) {
-                $employee = $employees->get($employeeNumber);
-
-                if (!$employee) {
-                    Log::warning("Employee not found: {$employeeNumber}");
-                    continue;
+            // If not overwriting, check if payroll records exist
+            if (!$overwriteExisting) {
+                $existingCount = PayrollEntry::where('payroll_period_id', $payrollPeriod->id)->count();
+                if ($existingCount > 0) {
+                    return response()->json([
+                        'message' => 'Payroll records already exist for this period. Set overwrite_existing to true to replace them.',
+                    ], 422);
                 }
+            } else {
+                // Delete existing payroll records for this period
+                PayrollEntry::where('payroll_period_id', $payrollPeriod->id)->delete();
+            }
 
+            // Get all employees
+            $employees = Employee::all();
+
+            // Fetch attendance records
+            $attendanceRecords = DB::table('attendance')
+                ->whereBetween('work_date', [$payrollPeriod->period_start, $payrollPeriod->period_end])
+                ->get()
+                ->toArray();
+
+            // Group attendance records by employee
+            $attendanceByEmployee = [];
+            foreach ($attendanceRecords as $record) {
+                $employeeNumber = $record->employee_number;
+                if (!isset($attendanceByEmployee[$employeeNumber])) {
+                    $attendanceByEmployee[$employeeNumber] = [];
+                }
+                $attendanceByEmployee[$employeeNumber][] = $record;
+            }
+
+            // Create payroll records for each employee
+            $payrollRecords = [];
+
+            foreach ($employees as $employee) {
+                $employeeAttendance = $attendanceByEmployee[$employee->employee_number] ?? [];
                 $grossPay = 0;
-                $dailyRates = 0;
+                $dailyRates = [];
 
-                foreach ($employeeAttendances as $attendance) {
-                    if ($attendance->status === 'Present') {
-                        $grossPay += $attendance->daily_rate;
-                        $dailyRates += $attendance->daily_rate;
+                if (count($employeeAttendance) > 0 && ($validated['respect_attendance_status'] ?? true)) {
+                    foreach ($employeeAttendance as $record) {
+                        $status = $record->status;
+                        $dailyRate = $record->daily_rate ?? $employee->daily_rate;
+                        $adjustment = $record->adjustment ?? 0;
+                        $date = $record->work_date;
+
+                        $amount = match (strtolower($status)) {
+                            'present' => $dailyRate,
+                            'half day' => $dailyRate / 2,
+                            'absent', 'day off' => 0,
+                            'holiday', 'leave' => $dailyRate,
+                            default => $dailyRate,
+                        };
+
+                        $grossPay += $amount + $adjustment;
+
+                        if ($validated['include_daily_rates'] ?? false) {
+                            $dailyRates[] = [
+                                'date' => $date,
+                                'amount' => $dailyRate,
+                                'status' => $status,
+                                'adjustment' => $adjustment
+                            ];
+                        }
                     }
-                    $grossPay += $attendance->adjustment; // Add adjustments if any
+                } else {
+                    // Default calculation based on working days
+                    $startDate = new \DateTime($payrollPeriod->period_start);
+                    $endDate = new \DateTime($payrollPeriod->period_end);
+                    $interval = $startDate->diff($endDate);
+                    $days = $interval->days + 1;
+
+                    $grossPay = $employee->daily_rate * $days;
                 }
 
                 // Deduction calculations
@@ -105,24 +146,28 @@ class PayrollController extends Controller
                 $totalDeductions = $sssDeduction + $philhealthDeduction + $pagibigDeduction + $taxDeduction;
                 $netPay = max(0, $grossPay - $totalDeductions);
 
-                // Create or update payroll entry
-                PayrollEntry::updateOrCreate(
-                    [
-                        'employee_number' => $employeeNumber,
-                        'payroll_period_id' => $payrollPeriod->id,
-                    ],
-                    [
-                        'gross_pay' => $grossPay,
-                        'sss_deduction' => $sssDeduction,
-                        'philhealth_deduction' => $philhealthDeduction,
-                        'pagibig_deduction' => $pagibigDeduction,
-                        'tax_deduction' => $taxDeduction,
-                        'total_deductions' => $totalDeductions,
-                        'net_pay' => $netPay,
-                        'daily_rates' => $dailyRates,
-                        'status' => 'generated',
-                    ]
-                );
+                // Create payroll record
+                $payrollRecords[] = [
+                    'employee_id' => $employee->id,
+                    'employee_number' => $employee->employee_number,
+                    'payroll_period_id' => $payrollPeriod->id,
+                    'gross_pay' => $grossPay,
+                    'sss_deduction' => $sssDeduction,
+                    'philhealth_deduction' => $philhealthDeduction,
+                    'pagibig_deduction' => $pagibigDeduction,
+                    'tax_deduction' => $taxDeduction,
+                    'total_deductions' => $totalDeductions,
+                    'net_pay' => $netPay,
+                    'daily_rates' => $validated['include_daily_rates'] ?? false ? json_encode($dailyRates) : null,
+                    'status' => 'generated',
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ];
+            }
+
+            // Insert payroll records
+            if (!empty($payrollRecords)) {
+                PayrollEntry::insert($payrollRecords);
             }
 
             return redirect()->back()->with('success', 'Payroll generated successfully!');
@@ -132,4 +177,65 @@ class PayrollController extends Controller
             return redirect()->back()->with('error', 'Failed to generate payroll.');
         }
     }
+
+    public function update(Request $request, $id)
+{
+    try {
+        $validated = $request->validate([
+            'employee_number' => 'required|exists:employees,employee_number',
+            'payroll_period_id' => 'required|exists:payroll_periods,id',
+            'gross_pay' => 'required|numeric',
+            'total_deductions' => 'required|numeric',
+            'net_pay' => 'required|numeric',
+            'daily_rates' => 'nullable|json',
+        ]);
+
+        $payroll = PayrollEntry::findOrFail($id);
+        $payroll->update($validated);
+
+        return redirect()->back()->with('success', 'Payroll updated successfully!');
+    } catch (\Exception $e) {
+        Log::error('Error updating payroll: ' . $e->getMessage());
+
+        return redirect()->back()->with('error', 'Failed to update payroll.');
+    }
+}
+
+    public function store(Request $request)
+{
+    try {
+        $validated = $request->validate([
+            'employee_number' => 'required|exists:employees,employee_number',
+            'payroll_period_id' => 'required|exists:payroll_periods,id',
+            'gross_pay' => 'required|numeric',
+            'total_deductions' => 'required|numeric',
+            'net_pay' => 'required|numeric',
+            'daily_rates' => 'nullable|json',
+        ]);
+
+        PayrollEntry::create($validated);
+
+        return redirect()->back()->with('success', 'Payroll created successfully!');
+    } catch (\Exception $e) {
+        Log::error('Error storing payroll: ' . $e->getMessage());
+
+        return redirect()->back()->with('error', 'Failed to store payroll.');
+    }
+}
+
+public function destroy($id)
+{
+    try {
+        $payroll = PayrollEntry::findOrFail($id);
+        $payroll->delete();
+
+        return redirect()->back()->with('success', 'Payroll deleted successfully!');
+    } catch (\Exception $e) {
+        Log::error('Error deleting payroll: ' . $e->getMessage());
+
+        return redirect()->back()->with('error', 'Failed to delete payroll.');
+    }
+}
+
+
 }
