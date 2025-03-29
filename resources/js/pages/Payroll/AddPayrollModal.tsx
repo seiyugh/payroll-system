@@ -1,624 +1,705 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { useForm } from "@inertiajs/react"
-import { Button } from "@/components/ui/button"
-import { toast } from "sonner"
+import type React from "react"
 
-const AddPayrollModal = ({ onClose, employees = [], payrollPeriods = [] }) => {
-  const { data, setData, post, processing, errors, reset } = useForm({
-    employee_id: "", // Added employee_id field
+import { useState, useEffect } from "react"
+import { router } from "@inertiajs/react"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { toast } from "sonner"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog"
+import { Card, CardContent } from "@/components/ui/card"
+
+interface Employee {
+  id: number
+  employee_number: string
+  first_name: string
+  last_name: string
+  daily_rate: string
+  department?: string
+}
+
+interface PayrollPeriod {
+  id: number
+  week_id: number
+  period_start: string
+  period_end: string
+  payment_date: string
+  status: string
+}
+
+interface AddPayrollModalProps {
+  isOpen?: boolean
+  onClose: () => void
+  employees: Employee[]
+  payrollPeriods: PayrollPeriod[]
+}
+
+const AddPayrollModal = ({ isOpen = true, onClose, employees, payrollPeriods }: AddPayrollModalProps) => {
+  const [formData, setFormData] = useState({
     employee_number: "",
-    employee_name: "",
-    department: "",
-    designation: "",
-    payroll_period_id: "",
-    period_start: "",
-    period_end: "",
-    payment_date: "",
-    daily_rates: [
-      { date: "", amount: "", additional: "" },
-      { date: "", amount: "", additional: "" },
-      { date: "", amount: "", additional: "" },
-      { date: "", amount: "", additional: "" },
-      { date: "", amount: "", additional: "" },
-      { date: "", amount: "", additional: "" },
-      { date: "", amount: "", additional: "" },
-    ],
-    gross_pay: "",
-    sss_deduction: "0", // Initialize with "0" instead of empty string
-    philhealth_deduction: "0",
-    pagibig_deduction: "0",
-    cash_advance: "0",
-    loan: "0",
-    vat: "0",
-    other_deductions: "0",
-    total_deductions: "0",
-    net_pay: "0",
-    status: "Pending",
-    attendance_records: null, // Added attendance_records field
-    daily_rate: "", // Added daily_rate field
+    week_id: "",
+    daily_rate: "",
+    gross_pay: "0.00",
+    sss_deduction: "0.00",
+    philhealth_deduction: "0.00",
+    pagibig_deduction: "0.00",
+    tax_deduction: "0.00",
+    cash_advance: "0.00",
+    loan: "0.00",
+    vat: "0.00",
+    other_deductions: "0.00",
+    total_deductions: "0.00",
+    net_pay: "0.00",
+    ytd_earnings: "0.00",
+    thirteenth_month_pay: "0.00",
+    status: "generated",
+    short: "0.00",
   })
 
-  // State to track if we should auto-calculate deductions
-  const [autoCalculate, setAutoCalculate] = useState(true)
-  const [attendanceRecords, setAttendanceRecords] = useState([])
-  const [isLoadingAttendance, setIsLoadingAttendance] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [errors, setErrors] = useState<Record<string, string>>({})
+  const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null)
+  const [employeeSearchTerm, setEmployeeSearchTerm] = useState("")
+  const [filteredEmployees, setFilteredEmployees] = useState(employees)
+  const [isAllenOne, setIsAllenOne] = useState(false)
 
-  // Get selected employee data
-  const selectedEmployee = employees.find((emp) => emp.employee_number === data.employee_number)
-
-  // When employee is selected, populate their details
+  // Calculate derived values when form data changes
   useEffect(() => {
     if (selectedEmployee) {
-      setData((prev) => ({
+      // Set daily rate from selected employee
+      setFormData((prev) => ({
         ...prev,
-        employee_id: selectedEmployee.id, // Set the employee_id
-        employee_name: selectedEmployee.full_name || "",
-        department: selectedEmployee.department || "",
-        designation: selectedEmployee.position || "",
-        daily_rate: selectedEmployee.daily_rate || "545.15", // Set the daily_rate
+        daily_rate: selectedEmployee.daily_rate,
       }))
     }
-  }, [data.employee_number, selectedEmployee])
+  }, [selectedEmployee])
 
-  // When payroll period is selected, populate the dates and fetch attendance
+  // Filter employees based on search term
   useEffect(() => {
-    const selectedPeriod = payrollPeriods.find((p) => p.id === Number(data.payroll_period_id))
-    if (selectedPeriod && selectedEmployee) {
-      // Set period start and end dates
-      setData((prev) => ({
-        ...prev,
-        period_start: selectedPeriod.period_start,
-        period_end: selectedPeriod.period_end,
-        payment_date: selectedPeriod.payment_date,
-      }))
-
-      // Fetch attendance records for this employee and period
-      fetchAttendanceRecords(selectedEmployee.employee_number, selectedPeriod.period_start, selectedPeriod.period_end)
-    }
-  }, [data.payroll_period_id, payrollPeriods, selectedEmployee])
-
-  // Fetch attendance records
-  const fetchAttendanceRecords = async (employeeNumber, startDate, endDate) => {
-    if (!employeeNumber || !startDate || !endDate) return
-
-    setIsLoadingAttendance(true)
-    try {
-      const response = await fetch(
-        `/attendance/fetch-for-payslip?employee_number=${employeeNumber}&start_date=${startDate}&end_date=${endDate}`,
-      )
-
-      if (response.ok) {
-        const data = await response.json()
-        if (data && data.attendances && Array.isArray(data.attendances)) {
-          setAttendanceRecords(data.attendances)
-
-          // Update the form data with the attendance records
-          setData((prev) => ({
-            ...prev,
-            attendance_records: JSON.stringify(data.attendances),
-          }))
-
-          // Generate daily rates based on attendance records
-          generateDailyRatesFromAttendance(data.attendances, selectedEmployee?.daily_rate || 545.15)
-        } else {
-          // If no records found, create empty records for each day in the period
-          const start = new Date(startDate)
-          const end = new Date(endDate)
-          const emptyRecords = []
-
-          const currentDate = new Date(start)
-          while (currentDate <= end) {
-            emptyRecords.push({
-              id: 0,
-              employee_number: employeeNumber,
-              work_date: currentDate.toISOString().split("T")[0],
-              daily_rate: selectedEmployee?.daily_rate || 545.15,
-              adjustment: 0,
-              status: "No Record",
-              full_name: selectedEmployee?.full_name || "",
-            })
-            currentDate.setDate(currentDate.getDate() + 1)
-          }
-
-          setAttendanceRecords(emptyRecords)
-
-          // Update the form data with the empty attendance records
-          setData((prev) => ({
-            ...prev,
-            attendance_records: JSON.stringify(emptyRecords),
-          }))
-
-          // Generate daily rates based on empty records
-          generateDailyRatesFromAttendance(emptyRecords, selectedEmployee?.daily_rate || 545.15)
-        }
-      } else {
-        console.error("Failed to fetch attendance records")
-        toast.error("Failed to load attendance records")
-      }
-    } catch (error) {
-      console.error("Error fetching attendance:", error)
-      toast.error("Error loading attendance data")
-    } finally {
-      setIsLoadingAttendance(false)
-    }
-  }
-
-  // Generate daily rates from attendance records
-  const generateDailyRatesFromAttendance = (records, defaultDailyRate) => {
-    const dailyRates = records.map((record) => {
-      // Calculate amount based on status
-      let amount = defaultDailyRate
-      switch (record.status?.toLowerCase()) {
-        case "present":
-          amount = record.daily_rate || defaultDailyRate
-          break
-        case "half day":
-          amount = (record.daily_rate || defaultDailyRate) / 2
-          break
-        case "absent":
-        case "day off":
-          amount = 0
-          break
-        case "holiday":
-        case "leave":
-          amount = record.daily_rate || defaultDailyRate
-          break
-        case "no record":
-          amount = 0
-          break
-        default:
-          amount = record.daily_rate || defaultDailyRate
-      }
-
-      return {
-        date: record.work_date,
-        amount: amount.toString(),
-        additional: (record.adjustment || 0).toString(),
-      }
-    })
-
-    // Fill remaining slots with empty entries if less than 7 days
-    while (dailyRates.length < 7) {
-      dailyRates.push({ date: "", amount: "", additional: "" })
-    }
-
-    // Trim to 7 days if more than 7
-    const trimmedRates = dailyRates.slice(0, 7)
-
-    setData((prev) => ({
-      ...prev,
-      daily_rates: trimmedRates,
-    }))
-  }
-
-  // Handle form field changes
-  const handleChange = (e) => {
-    const { name, value } = e.target
-    setData(name, value)
-  }
-
-  // Handle daily rate changes
-  const handleDailyRateChange = (index, field, value) => {
-    const updatedRates = [...data.daily_rates]
-    updatedRates[index] = {
-      ...updatedRates[index],
-      [field]: value,
-    }
-
-    setData("daily_rates", updatedRates)
-  }
-
-  // Calculate gross pay based on daily rates
-  useEffect(() => {
-    const grossPay = data.daily_rates.reduce((sum, day) => {
-      const dailyAmount = Number.parseFloat(day.amount) || 0
-      const additionalAmount = Number.parseFloat(day.additional) || 0
-      return sum + dailyAmount + additionalAmount
-    }, 0)
-
-    setData("gross_pay", grossPay.toFixed(2))
-  }, [data.daily_rates])
-
-  // Auto-calculate SSS, PhilHealth, and Pag-IBIG deductions based on gross pay
-  useEffect(() => {
-    if (!autoCalculate || !data.gross_pay) return
-
-    const grossPay = Number.parseFloat(data.gross_pay) || 0
-
-    // SSS contribution calculation (simplified version)
-    let sssContribution = 0
-    if (grossPay <= 3250) {
-      sssContribution = 135
-    } else if (grossPay <= 24750) {
-      // Simplified calculation - in reality this has brackets
-      sssContribution = grossPay * 0.045
+    if (employeeSearchTerm.trim() === "") {
+      setFilteredEmployees(employees)
     } else {
-      sssContribution = 1125 // Maximum SSS contribution
+      const searchTermLower = employeeSearchTerm.toLowerCase()
+      const filtered = employees.filter(
+        (emp) =>
+          emp.employee_number.toLowerCase().includes(searchTermLower) ||
+          emp.first_name.toLowerCase().includes(searchTermLower) ||
+          emp.last_name.toLowerCase().includes(searchTermLower),
+      )
+      setFilteredEmployees(filtered)
+    }
+  }, [employeeSearchTerm, employees])
+
+  // Calculate gross pay, deductions, and net pay
+  useEffect(() => {
+    const calculatePayroll = () => {
+      try {
+        // Parse values as numbers
+        const dailyRate = Number.parseFloat(formData.daily_rate) || 0
+        const sssDeduction = Number.parseFloat(formData.sss_deduction) || 0
+        const philhealthDeduction = Number.parseFloat(formData.philhealth_deduction) || 0
+        const pagibigDeduction = Number.parseFloat(formData.pagibig_deduction) || 0
+        const taxDeduction = Number.parseFloat(formData.tax_deduction) || 0
+        const cashAdvance = Number.parseFloat(formData.cash_advance) || 0
+        const loan = Number.parseFloat(formData.loan) || 0
+        const vat = Number.parseFloat(formData.vat) || 0
+        const otherDeductions = Number.parseFloat(formData.other_deductions) || 0
+        const short = Number.parseFloat(formData.short) || 0
+
+        // Calculate gross pay (assuming 5 working days per week)
+        const grossPay = dailyRate * 5
+
+        // Calculate total deductions
+        const totalDeductions =
+          sssDeduction +
+          philhealthDeduction +
+          pagibigDeduction +
+          taxDeduction +
+          cashAdvance +
+          loan +
+          vat +
+          otherDeductions +
+          short
+
+        // Calculate net pay
+        const netPay = grossPay - totalDeductions
+
+        // Update form data with calculated values
+        setFormData((prev) => ({
+          ...prev,
+          gross_pay: grossPay.toFixed(2),
+          total_deductions: totalDeductions.toFixed(2),
+          net_pay: netPay.toFixed(2),
+        }))
+      } catch (error) {
+        console.error("Error calculating payroll:", error)
+      }
     }
 
-    // PhilHealth contribution calculation (4% of gross pay, split between employer and employee)
-    const philhealthContribution = Math.min(grossPay * 0.02, 1800) // 2% from employee, capped at 1800
-
-    // Pag-IBIG contribution calculation (usually 2% of gross pay)
-    const pagibigContribution = Math.min(grossPay * 0.02, 100) // 2%, capped at 100
-
-    setData((prev) => ({
-      ...prev,
-      sss_deduction: sssContribution.toFixed(2),
-      philhealth_deduction: philhealthContribution.toFixed(2),
-      pagibig_deduction: pagibigContribution.toFixed(2),
-    }))
-  }, [data.gross_pay, autoCalculate])
-
-  // Calculate total deductions and net pay
-  useEffect(() => {
-    const sssDeduction = Number.parseFloat(data.sss_deduction) || 0
-    const philhealthDeduction = Number.parseFloat(data.philhealth_deduction) || 0
-    const pagibigDeduction = Number.parseFloat(data.pagibig_deduction) || 0
-    const cashAdvance = Number.parseFloat(data.cash_advance) || 0
-    const loan = Number.parseFloat(data.loan) || 0
-    const vat = Number.parseFloat(data.vat) || 0
-    const otherDeductions = Number.parseFloat(data.other_deductions) || 0
-
-    const totalDeductions =
-      sssDeduction + philhealthDeduction + pagibigDeduction + cashAdvance + loan + vat + otherDeductions
-
-    const grossPay = Number.parseFloat(data.gross_pay) || 0
-    const netPay = grossPay - totalDeductions
-
-    setData((prev) => ({
-      ...prev,
-      total_deductions: totalDeductions.toFixed(2),
-      net_pay: netPay.toFixed(2),
-    }))
+    calculatePayroll()
   }, [
-    data.gross_pay,
-    data.sss_deduction,
-    data.philhealth_deduction,
-    data.pagibig_deduction,
-    data.cash_advance,
-    data.loan,
-    data.vat,
-    data.other_deductions,
+    formData.daily_rate,
+    formData.sss_deduction,
+    formData.philhealth_deduction,
+    formData.pagibig_deduction,
+    formData.tax_deduction,
+    formData.cash_advance,
+    formData.loan,
+    formData.vat,
+    formData.other_deductions,
+    formData.short,
   ])
 
+  // Add this useEffect after the other useEffect hooks
+  useEffect(() => {
+    // Auto-select the first period if available and none is selected
+    if (payrollPeriods.length > 0 && !formData.week_id) {
+      // Find a pending period first
+      const pendingPeriod = payrollPeriods.find((p) => p.status.toLowerCase() === "pending")
+
+      if (pendingPeriod) {
+        setFormData((prev) => ({
+          ...prev,
+          week_id: pendingPeriod.week_id.toString(),
+        }))
+      } else {
+        // If no pending period, use the first one
+        setFormData((prev) => ({
+          ...prev,
+          week_id: payrollPeriods[0].week_id.toString(),
+        }))
+      }
+    }
+  }, [payrollPeriods])
+
+  // Handle employee selection
+  const handleEmployeeChange = (value: string) => {
+    // Find the selected employee
+    const employee = employees.find((emp) => emp.employee_number === value)
+
+    // Check if employee is Allen One
+    const isAllen = employee?.department?.toLowerCase() === "allen one"
+    setIsAllenOne(isAllen)
+
+    setFormData((prev) => ({
+      ...prev,
+      employee_number: value,
+      daily_rate: employee?.daily_rate || prev.daily_rate,
+      short: isAllen ? prev.short : "0", // Reset short if not Allen One
+    }))
+
+    setSelectedEmployee(employee || null)
+  }
+
+  // Handle form input changes
+  const handleChange = (name: string, value: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      [name]: value,
+    }))
+  }
+
   // Handle form submission
-  const handleSubmit = (e) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
+    setIsSubmitting(true)
 
-    // Check if payroll already exists for this employee and period
-    fetch(`/payroll/check-existing?employee_number=${data.employee_number}&payroll_period_id=${data.payroll_period_id}`)
-      .then((response) => response.json())
-      .then((result) => {
-        if (result.exists) {
-          toast.error("A payroll record already exists for this employee and period!")
-          return
-        }
+    // Format the data to match what the server expects
+    const formattedData = {
+      ...formData,
+      week_id: Number.parseInt(formData.week_id),
+      daily_rate: Number.parseFloat(formData.daily_rate.toString() || "0"),
+      gross_pay: Number.parseFloat(formData.gross_pay),
+      sss_deduction: Number.parseFloat(formData.sss_deduction),
+      philhealth_deduction: Number.parseFloat(formData.philhealth_deduction),
+      pagibig_deduction: Number.parseFloat(formData.pagibig_deduction),
+      tax_deduction: Number.parseFloat(formData.tax_deduction),
+      cash_advance: Number.parseFloat(formData.cash_advance || "0"),
+      loan: Number.parseFloat(formData.loan || "0"),
+      vat: Number.parseFloat(formData.vat || "0"),
+      other_deductions: Number.parseFloat(formData.other_deductions || "0"),
+      total_deductions: Number.parseFloat(formData.total_deductions),
+      net_pay: Number.parseFloat(formData.net_pay),
+      ytd_earnings: Number.parseFloat(formData.ytd_earnings || "0"),
+      thirteenth_month_pay: Number.parseFloat(formData.thirteenth_month_pay || "0"),
+      short: Number.parseFloat(formData.short || "0"),
+    }
 
-        // Ensure daily_rates is properly formatted as JSON string if needed
-        const formattedData = {
-          ...data,
-          daily_rates: typeof data.daily_rates === "string" ? data.daily_rates : JSON.stringify(data.daily_rates),
-          attendance_records: data.attendance_records, // This should already be a JSON string
-        }
+    // Ensure short is 0 for non-Allen One employees
+    if (!isAllenOne) {
+      formattedData.short = 0
+    }
 
-        // Log the data being submitted for debugging
-        console.log("Submitting payroll data:", formattedData)
+    console.log("Submitting new payroll with data:", formattedData)
+    console.log("Request URL:", "/payroll/entries")
+    console.log("Request Method: POST")
 
-        post("/payroll", formattedData, {
-          onSuccess: () => {
-            toast.success("Payroll added successfully!")
-            reset()
-            onClose()
-          },
-          onError: (errors) => {
-            console.error("Submission errors:", errors)
-            Object.values(errors).forEach((message) => {
-              toast.error(`Error: ${message}`)
-            })
-          },
+    // Use Inertia to create the payroll
+    router.post("/payroll/entries", formattedData, {
+      onSuccess: (page) => {
+        console.log("Payroll add success response:", page)
+        toast.success("Payroll added successfully!")
+        setIsSubmitting(false)
+        onClose()
+
+        // Force a refresh of the data
+        router.visit(window.location.pathname + window.location.search, {
+          only: ["payrollEntries", "payrollSummary"],
+          preserveScroll: true,
+          preserveState: false,
         })
-      })
-      .catch((error) => {
-        console.error("Error checking existing payroll:", error)
-        toast.error("Failed to validate payroll. Please try again.")
-      })
+      },
+      onError: (errors) => {
+        console.error("Payroll add error:", errors)
+        setErrors(errors)
+        setIsSubmitting(false)
+        Object.entries(errors).forEach(([field, message]) => {
+          toast.error(`${field}: ${message}`)
+        })
+      },
+      preserveState: true,
+      preserveScroll: true,
+    })
+  }
+
+  // Calculate standard deductions based on gross pay
+  const calculateStandardDeductions = () => {
+    const grossPay = Number.parseFloat(formData.gross_pay) || 0
+
+    // Calculate standard deductions based on Philippine rates (simplified example)
+    // Calculate SSS (Social Security System) contribution
+    // This is a simplified calculation - adjust according to actual SSS table
+    const { sss, philhealth, pagibig, tax } = calculateStandardDeductionsHelper(grossPay)
+
+    setFormData((prev) => ({
+      ...prev,
+      sss_deduction: sss,
+      philhealth_deduction: philhealth,
+      pagibig_deduction: pagibig,
+      tax_deduction: tax,
+    }))
+
+    toast.success("Standard deductions calculated based on gross pay")
+  }
+
+  const calculateStandardDeductionsHelper = (grossPay: number) => {
+    // Parse the gross pay to ensure it's a number
+    const gross = Number.parseFloat(grossPay.toString()) || 0
+
+    // Calculate SSS (Social Security System) contribution
+    // This is a simplified calculation - adjust according to actual SSS table
+    let sss = 0
+    if (gross <= 3250) {
+      sss = 135
+    } else if (gross <= 3750) {
+      sss = 157.5
+    } else if (gross <= 4250) {
+      sss = 180
+    } else if (gross <= 4750) {
+      sss = 202.5
+    } else if (gross <= 5250) {
+      sss = 225
+    } else if (gross <= 5750) {
+      sss = 247.5
+    } else if (gross <= 6250) {
+      sss = 270
+    } else if (gross <= 6750) {
+      sss = 292.5
+    } else if (gross <= 7250) {
+      sss = 315
+    } else if (gross <= 7750) {
+      sss = 337.5
+    } else if (gross <= 8250) {
+      sss = 360
+    } else if (gross <= 8750) {
+      sss = 382.5
+    } else if (gross <= 9250) {
+      sss = 405
+    } else if (gross <= 9750) {
+      sss = 427.5
+    } else if (gross <= 10250) {
+      sss = 450
+    } else if (gross <= 10750) {
+      sss = 472.5
+    } else if (gross <= 11250) {
+      sss = 495
+    } else if (gross <= 11750) {
+      sss = 517.5
+    } else if (gross <= 12250) {
+      sss = 540
+    } else if (gross <= 12750) {
+      sss = 562.5
+    } else if (gross <= 13250) {
+      sss = 585
+    } else if (gross <= 13750) {
+      sss = 607.5
+    } else if (gross <= 14250) {
+      sss = 630
+    } else if (gross <= 14750) {
+      sss = 652.5
+    } else if (gross <= 15250) {
+      sss = 675
+    } else if (gross <= 15750) {
+      sss = 697.5
+    } else if (gross <= 16250) {
+      sss = 720
+    } else if (gross <= 16750) {
+      sss = 742.5
+    } else if (gross <= 17250) {
+      sss = 765
+    } else if (gross <= 17750) {
+      sss = 787.5
+    } else if (gross <= 18250) {
+      sss = 810
+    } else if (gross <= 18750) {
+      sss = 832.5
+    } else if (gross <= 19250) {
+      sss = 855
+    } else if (gross <= 19750) {
+      sss = 877.5
+    } else if (gross <= 20250) {
+      sss = 900
+    } else if (gross <= 20750) {
+      sss = 922.5
+    } else if (gross <= 21250) {
+      sss = 945
+    } else if (gross <= 21750) {
+      sss = 967.5
+    } else if (gross <= 22250) {
+      sss = 990
+    } else if (gross <= 22750) {
+      sss = 1012.5
+    } else if (gross <= 23250) {
+      sss = 1035
+    } else if (gross <= 23750) {
+      sss = 1057.5
+    } else if (gross <= 24250) {
+      sss = 1080
+    } else if (gross <= 24750) {
+      sss = 1102.5
+    } else {
+      sss = 1125
+    }
+
+    // Calculate PhilHealth contribution (4% of gross pay, split between employee and employer)
+    // Employee pays 2% with a ceiling
+    const philhealth = Math.min(gross * 0.02, 900) // Maximum of 900 for 45,000 and above
+
+    // Calculate Pag-IBIG contribution (usually 100 for those earning below 1,500, and 2% for those above)
+    const pagibig = gross < 1500 ? 100 : Math.min(gross * 0.02, 100)
+
+    // Calculate withholding tax (simplified)
+    let tax = 0
+    const taxableIncome = gross - sss - philhealth - pagibig
+
+    if (taxableIncome <= 20833) {
+      tax = 0
+    } else if (taxableIncome <= 33332) {
+      tax = (taxableIncome - 20833) * 0.2
+    } else if (taxableIncome <= 66666) {
+      tax = 2500 + (taxableIncome - 33333) * 0.25
+    } else if (taxableIncome <= 166666) {
+      tax = 10833.33 + (taxableIncome - 66667) * 0.3
+    } else if (taxableIncome <= 666666) {
+      tax = 40833.33 + (taxableIncome - 166667) * 0.32
+    } else {
+      tax = 200833.33 + (taxableIncome - 666667) * 0.35
+    }
+
+    return {
+      sss: sss.toFixed(2),
+      philhealth: philhealth.toFixed(2),
+      pagibig: pagibig.toFixed(2),
+      tax: tax.toFixed(2),
+    }
   }
 
   return (
-    <div className="fixed inset-0 flex items-center justify-center bg-black/50 z-50">
-      <div className="bg-white dark:bg-slate-900 text-black dark:text-white p-6 rounded-lg shadow-lg w-[800px] max-h-[80vh] overflow-y-auto border border-gray-300 dark:border-gray-700">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-semibold">Add Payroll</h2>
-          <Button variant="ghost" onClick={onClose} className="h-8 w-8 p-0 rounded-full">
-            &times;
-          </Button>
-        </div>
+    <Dialog open={isOpen} onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-[800px] max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Add New Payroll Entry</DialogTitle>
+          <DialogDescription>Create a new payroll entry for an employee</DialogDescription>
+        </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="mt-4">
-          <div className="grid grid-cols-2 gap-4 mb-6">
-            <SelectField
-              label="Employee"
-              name="employee_number"
-              value={data.employee_number}
-              onChange={handleChange}
-              options={employees.map((emp) => ({
-                value: emp.employee_number,
-                label: `${emp.employee_number} - ${emp.full_name || ""}`,
-              }))}
-              error={errors.employee_number}
-            />
-
-            <SelectField
-              label="Payroll Period"
-              name="payroll_period_id"
-              value={data.payroll_period_id}
-              onChange={handleChange}
-              options={payrollPeriods.map((period) => ({
-                value: period.id,
-                label: `${new Date(period.period_start).toLocaleDateString()} - ${new Date(period.period_end).toLocaleDateString()}`,
-              }))}
-              error={errors.payroll_period_id}
-            />
-
-            <InputField
-              label="Employee Name"
-              name="employee_name"
-              value={data.employee_name}
-              onChange={handleChange}
-              readOnly
-            />
-
-            <InputField label="Department" name="department" value={data.department} onChange={handleChange} readOnly />
-
-            <InputField
-              label="Designation"
-              name="designation"
-              value={data.designation}
-              onChange={handleChange}
-              readOnly
-            />
-
-            <InputField
-              label="Payment Date"
-              name="payment_date"
-              value={data.payment_date ? new Date(data.payment_date).toLocaleDateString() : ""}
-              onChange={handleChange}
-              readOnly
-            />
-          </div>
-
-          {isLoadingAttendance ? (
-            <div className="flex justify-center py-4 mb-6">
-              <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-indigo-500"></div>
-              <span className="ml-2">Loading attendance records...</span>
-            </div>
-          ) : (
-            <div className="mb-6">
-              <h3 className="font-medium mb-2">Daily Rates</h3>
-              <div className="overflow-x-auto">
-                <table className="w-full border-collapse">
-                  <thead className="bg-slate-100 dark:bg-slate-800">
-                    <tr>
-                      <th className="border border-gray-300 dark:border-gray-600 p-2 text-left">Date</th>
-                      <th className="border border-gray-300 dark:border-gray-600 p-2 text-left">Status</th>
-                      <th className="border border-gray-300 dark:border-gray-600 p-2 text-left">Daily Rate</th>
-                      <th className="border border-gray-300 dark:border-gray-600 p-2 text-left">Adjustments</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.daily_rates.map((rate, index) => {
-                      // Find matching attendance record
-                      const attendanceRecord = rate.date
-                        ? attendanceRecords.find(
-                            (record) => record.work_date === rate.date || record.date === rate.date,
-                          )
-                        : null
-
-                      return (
-                        <tr key={index}>
-                          <td className="border border-gray-300 dark:border-gray-600 p-2">
-                            {rate.date
-                              ? new Date(rate.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })
-                              : ""}
-                          </td>
-                          <td className="border border-gray-300 dark:border-gray-600 p-2">
-                            {attendanceRecord ? attendanceRecord.status : "N/A"}
-                          </td>
-                          <td className="border border-gray-300 dark:border-gray-600 p-2">
-                            <input
-                              type="number"
-                              step="0.01"
-                              value={rate.amount}
-                              onChange={(e) => handleDailyRateChange(index, "amount", e.target.value)}
-                              className="w-full p-1 bg-white dark:bg-slate-800 border border-gray-300 dark:border-gray-600 rounded"
-                            />
-                          </td>
-                          <td className="border border-gray-300 dark:border-gray-600 p-2">
-                            <input
-                              type="number"
-                              step="0.01"
-                              value={rate.additional}
-                              onChange={(e) => handleDailyRateChange(index, "additional", e.target.value)}
-                              className="w-full p-1 bg-white dark:bg-slate-800 border border-gray-300 dark:border-gray-600 rounded"
-                            />
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
+        <form onSubmit={handleSubmit} className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Employee and Period Selection */}
+            <div className="space-y-4">
+              <div>
+                <Label htmlFor="employee_search">Search Employee</Label>
+                <Input
+                  id="employee_search"
+                  type="text"
+                  placeholder="Search by name or employee number"
+                  value={employeeSearchTerm}
+                  onChange={(e) => setEmployeeSearchTerm(e.target.value)}
+                  className="mb-2"
+                />
+                <Label htmlFor="employee_number">Employee</Label>
+                <Select value={formData.employee_number} onValueChange={(value) => handleEmployeeChange(value)}>
+                  <SelectTrigger id="employee_number" className={errors.employee_number ? "border-red-500" : ""}>
+                    <SelectValue placeholder="Select Employee" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {filteredEmployees.map((employee) => (
+                      <SelectItem key={employee.id} value={employee.employee_number}>
+                        {employee.employee_number} - {employee.first_name} {employee.last_name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {errors.employee_number && <p className="text-red-500 text-xs mt-1">{errors.employee_number}</p>}
               </div>
-            </div>
-          )}
 
-          <div className="grid grid-cols-2 gap-4 mb-6">
-            <div>
-              <h3 className="font-medium mb-2">Earnings</h3>
-              <InputField
-                type="number"
-                label="Gross Pay"
-                name="gross_pay"
-                value={data.gross_pay}
-                onChange={handleChange}
-                readOnly
-              />
-            </div>
+              <div>
+                <Label htmlFor="week_id">Payroll Period (Week ID)</Label>
+                <Select value={formData.week_id} onValueChange={(value) => handleChange("week_id", value)}>
+                  <SelectTrigger id="week_id" className={errors.week_id ? "border-red-500" : ""}>
+                    <SelectValue placeholder="Select Period" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {payrollPeriods.map((period) => (
+                      <SelectItem key={period.id} value={period.week_id.toString()}>
+                        Week {period.week_id}: {new Date(period.period_start).toLocaleDateString()} -{" "}
+                        {new Date(period.period_end).toLocaleDateString()}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {errors.week_id && <p className="text-red-500 text-xs mt-1">{errors.week_id}</p>}
+              </div>
 
-            <div>
-              <h3 className="font-medium mb-2">Deductions</h3>
-              <div className="space-y-2">
-                <div className="flex items-center mb-2">
-                  <input
-                    type="checkbox"
-                    checked={autoCalculate}
-                    onChange={() => setAutoCalculate(!autoCalculate)}
-                    className="mr-2"
+              <div>
+                <Label htmlFor="daily_rate">Daily Rate</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">₱</span>
+                  <Input
+                    id="daily_rate"
+                    type="number"
+                    value={formData.daily_rate}
+                    onChange={(e) => handleChange("daily_rate", e.target.value)}
+                    step="0.01"
+                    className={`pl-8 ${errors.daily_rate ? "border-red-500" : ""}`}
                   />
-                  <label className="text-sm">Auto-calculate mandatory deductions</label>
                 </div>
+                {errors.daily_rate && <p className="text-red-500 text-xs mt-1">{errors.daily_rate}</p>}
+              </div>
 
-                <InputField
-                  type="number"
-                  label="SSS"
-                  name="sss_deduction"
-                  value={data.sss_deduction}
-                  onChange={handleChange}
-                  readOnly={autoCalculate}
-                />
+              <div>
+                <Label htmlFor="status">Status</Label>
+                <Select value={formData.status} onValueChange={(value) => handleChange("status", value)}>
+                  <SelectTrigger id="status" className={errors.status ? "border-red-500" : ""}>
+                    <SelectValue placeholder="Select Status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="generated">Generated</SelectItem>
+                    <SelectItem value="approved">Approved</SelectItem>
+                    <SelectItem value="paid">Paid</SelectItem>
+                    <SelectItem value="pending">Pending</SelectItem>
+                  </SelectContent>
+                </Select>
+                {errors.status && <p className="text-red-500 text-xs mt-1">{errors.status}</p>}
+              </div>
 
-                <InputField
-                  type="number"
-                  label="PhilHealth"
-                  name="philhealth_deduction"
-                  value={data.philhealth_deduction}
-                  onChange={handleChange}
-                  readOnly={autoCalculate}
-                />
+              <Card className="bg-indigo-50 dark:bg-indigo-900/20 border-indigo-100 dark:border-indigo-800">
+                <CardContent className="p-4">
+                  <h3 className="font-medium text-indigo-700 dark:text-indigo-300 mb-2">Payroll Summary</h3>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <p className="text-sm text-indigo-600 dark:text-indigo-400">Gross Pay:</p>
+                      <p className="font-bold text-indigo-700 dark:text-indigo-300">₱{formData.gross_pay}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-indigo-600 dark:text-indigo-400">Total Deductions:</p>
+                      <p className="font-bold text-indigo-700 dark:text-indigo-300">₱{formData.total_deductions}</p>
+                    </div>
+                    <div className="col-span-2">
+                      <p className="text-sm text-indigo-600 dark:text-indigo-400">Net Pay:</p>
+                      <p className="font-bold text-lg text-indigo-700 dark:text-indigo-300">₱{formData.net_pay}</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
 
-                <InputField
-                  type="number"
-                  label="Pag-IBIG"
-                  name="pagibig_deduction"
-                  value={data.pagibig_deduction}
-                  onChange={handleChange}
-                  readOnly={autoCalculate}
-                />
+            {/* Deductions */}
+            <div className="space-y-4">
+              <div className="flex justify-between items-center">
+                <h3 className="font-medium">Deductions</h3>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={calculateStandardDeductions}
+                  className="text-xs border-indigo-200 text-indigo-600 hover:border-indigo-300 dark:border-indigo-800 dark:text-indigo-400 dark:hover:border-indigo-700"
+                >
+                  Calculate Standard Deductions
+                </Button>
+              </div>
 
-                <InputField
-                  type="number"
-                  label="Cash Advance"
-                  name="cash_advance"
-                  value={data.cash_advance}
-                  onChange={handleChange}
-                />
+              <div>
+                <Label htmlFor="sss_deduction">SSS</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">₱</span>
+                  <Input
+                    id="sss_deduction"
+                    type="number"
+                    value={formData.sss_deduction}
+                    onChange={(e) => handleChange("sss_deduction", e.target.value)}
+                    step="0.01"
+                    className="pl-8"
+                  />
+                </div>
+              </div>
 
-                <InputField type="number" label="Loan" name="loan" value={data.loan} onChange={handleChange} />
+              <div>
+                <Label htmlFor="philhealth_deduction">PhilHealth</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">₱</span>
+                  <Input
+                    id="philhealth_deduction"
+                    type="number"
+                    value={formData.philhealth_deduction}
+                    onChange={(e) => handleChange("philhealth_deduction", e.target.value)}
+                    step="0.01"
+                    className="pl-8"
+                  />
+                </div>
+              </div>
 
-                <InputField type="number" label="VAT" name="vat" value={data.vat} onChange={handleChange} />
+              <div>
+                <Label htmlFor="pagibig_deduction">Pag-IBIG</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">₱</span>
+                  <Input
+                    id="pagibig_deduction"
+                    type="number"
+                    value={formData.pagibig_deduction}
+                    onChange={(e) => handleChange("pagibig_deduction", e.target.value)}
+                    step="0.01"
+                    className="pl-8"
+                  />
+                </div>
+              </div>
 
-                <InputField
-                  type="number"
-                  label="Others"
-                  name="other_deductions"
-                  value={data.other_deductions}
-                  onChange={handleChange}
-                />
+              <div>
+                <Label htmlFor="tax_deduction">Tax</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">₱</span>
+                  <Input
+                    id="tax_deduction"
+                    type="number"
+                    value={formData.tax_deduction}
+                    onChange={(e) => handleChange("tax_deduction", e.target.value)}
+                    step="0.01"
+                    className="pl-8"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <Label htmlFor="cash_advance">Cash Advance</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">₱</span>
+                  <Input
+                    id="cash_advance"
+                    type="number"
+                    value={formData.cash_advance}
+                    onChange={(e) => handleChange("cash_advance", e.target.value)}
+                    step="0.01"
+                    className="pl-8"
+                  />
+                </div>
+              </div>
+
+              {isAllenOne && (
+                <div>
+                  <Label htmlFor="short">Short</Label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">₱</span>
+                    <Input
+                      id="short"
+                      type="number"
+                      value={formData.short || "0"}
+                      onChange={(e) => handleChange("short", e.target.value)}
+                      step="0.01"
+                      className="pl-8"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <Label htmlFor="loan">Loan</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">₱</span>
+                  <Input
+                    id="loan"
+                    type="number"
+                    value={formData.loan}
+                    onChange={(e) => handleChange("loan", e.target.value)}
+                    step="0.01"
+                    className="pl-8"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <Label htmlFor="vat">VAT</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">₱</span>
+                  <Input
+                    id="vat"
+                    type="number"
+                    value={formData.vat}
+                    onChange={(e) => handleChange("vat", e.target.value)}
+                    step="0.01"
+                    className="pl-8"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <Label htmlFor="other_deductions">Other Deductions</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">₱</span>
+                  <Input
+                    id="other_deductions"
+                    type="number"
+                    value={formData.other_deductions}
+                    onChange={(e) => handleChange("other_deductions", e.target.value)}
+                    step="0.01"
+                    className="pl-8"
+                  />
+                </div>
               </div>
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4 mb-6">
-            <InputField
-              type="number"
-              label="Total Deductions"
-              name="total_deductions"
-              value={data.total_deductions}
-              onChange={handleChange}
-              readOnly
-            />
-
-            <InputField
-              type="number"
-              label="Net Pay"
-              name="net_pay"
-              value={data.net_pay}
-              onChange={handleChange}
-              readOnly
-            />
-
-            <SelectField
-              label="Status"
-              name="status"
-              value={data.status}
-              onChange={handleChange}
-              options={[
-                { value: "Pending", label: "Pending" },
-                { value: "Completed", label: "Completed" },
-                { value: "Rejected", label: "Rejected" },
-              ]}
-              error={errors.status}
-            />
-          </div>
-
-          <div className="flex justify-end space-x-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={onClose}
-              className="border-gray-500 text-gray-600 dark:border-gray-400 dark:text-gray-300"
-            >
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose}>
               Cancel
             </Button>
-            <Button type="submit" disabled={processing} className="bg-indigo-600 hover:bg-indigo-700 text-white">
-              {processing ? "Saving..." : "Save"}
+            <Button type="submit" disabled={isSubmitting}>
+              {isSubmitting ? "Creating..." : "Create Payroll Entry"}
             </Button>
-          </div>
+          </DialogFooter>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
-
-// Reusable Components
-const InputField = ({ label, type = "text", name, value, onChange, error, readOnly = false }) => (
-  <div className="flex flex-col">
-    <label className="text-sm text-gray-600 dark:text-gray-300 mb-1">{label}</label>
-    <input
-      type={type}
-      name={name}
-      value={value}
-      onChange={onChange}
-      className={`w-full p-2 border rounded bg-white dark:bg-slate-800 text-black dark:text-white border-gray-300 dark:border-gray-600 ${
-        readOnly ? "bg-gray-100 dark:bg-slate-700" : ""
-      }`}
-      readOnly={readOnly}
-    />
-    {error && <span className="text-red-500 text-xs mt-1">{error}</span>}
-  </div>
-)
-
-const SelectField = ({ label, name, value, onChange, options, error }) => (
-  <div className="flex flex-col">
-    <label className="text-sm text-gray-600 dark:text-gray-300 mb-1">{label}</label>
-    <select
-      name={name}
-      value={value}
-      onChange={onChange}
-      className="w-full p-2 border rounded bg-white dark:bg-slate-800 text-black dark:text-white border-gray-300 dark:border-gray-600"
-    >
-      <option value="">Select {label}</option>
-      {options.map((opt) => (
-        <option key={opt.value} value={opt.value}>
-          {opt.label}
-        </option>
-      ))}
-    </select>
-    {error && <span className="text-red-500 text-xs mt-1">{error}</span>}
-  </div>
-)
 
 export default AddPayrollModal
 

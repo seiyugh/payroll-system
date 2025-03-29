@@ -78,7 +78,47 @@ const AddAttendanceModal = ({ onClose, onSubmit, employees }: AddAttendanceModal
     }))
   }
 
-  const handleSubmit = (e) => {
+  const getStatusBadgeColor = (status: string) => {
+    switch (status) {
+      case "Present":
+        return "bg-green-50 text-green-700 border-green-200 dark:bg-green-900/20 dark:text-green-400 dark:border-green-800"
+      case "Absent":
+        return "bg-red-50 text-red-700 border-red-200 dark:bg-red-900/20 dark:text-red-400 dark:border-red-800"
+      case "Day Off":
+        return "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/20 dark:text-blue-400 dark:border-blue-800"
+      case "Half Day":
+        return "bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-900/20 dark:text-orange-400 dark:border-orange-800"
+      case "WFH":
+        return "bg-cyan-50 text-cyan-700 border-cyan-200 dark:bg-cyan-900/20 dark:text-cyan-400 dark:border-cyan-800"
+      case "Leave":
+        return "bg-yellow-50 text-yellow-700 border-yellow-200 dark:bg-yellow-900/20 dark:text-yellow-400 dark:border-yellow-800"
+      case "Holiday":
+        return "bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-900/20 dark:text-purple-400 dark:border-purple-800"
+      case "SP":
+        return "bg-pink-50 text-pink-700 border-pink-200 dark:bg-pink-900/20 dark:text-pink-400 dark:border-pink-800"
+      default:
+        return "bg-slate-50 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700"
+    }
+  }
+
+  // Function to check if an attendance record already exists
+  const checkExistingAttendance = async (employeeNumber, workDate) => {
+    try {
+      // This is where you would make an API call to check if a record exists
+      // For example:
+      // const response = await fetch(`/api/attendance/check?employee=${employeeNumber}&date=${workDate}`);
+      // const data = await response.json();
+      // return data.exists;
+
+      // For now, we'll return false as a placeholder
+      return false
+    } catch (error) {
+      console.error("Error checking existing attendance:", error)
+      return false
+    }
+  }
+
+  const handleSubmit = async (e) => {
     e.preventDefault()
 
     // Validate form
@@ -112,31 +152,37 @@ const AddAttendanceModal = ({ onClose, onSubmit, employees }: AddAttendanceModal
 
     setIsSubmitting(true)
 
-    // Format data for submission with proper number parsing
+    // Format data for submission
     const formattedData = {
       ...formData,
-      daily_rate: Number.parseFloat(formData.daily_rate) || 0, // Ensure it's a number or default to 0
-      adjustment: formData.adjustment ? Number.parseFloat(formData.adjustment) || 0 : 0, // Ensure it's a number or default to 0
+      daily_rate: Number.parseFloat(formData.daily_rate) || 0,
+      adjustment: formData.adjustment ? Number.parseFloat(formData.adjustment) || 0 : 0,
     }
 
+    // Find the selected employee for error messages
+    const selectedEmployee = employees.find((e) => e.employee_number === formData.employee_number)
+    const employeeName = selectedEmployee?.full_name || "this employee"
+
     try {
-      // Check if attendance record already exists for this employee and date
-      const selectedEmployee = employees.find((e) => e.employee_number === formData.employee_number)
-      const existingAttendance = employees.some(
-        (employee) =>
-          employee.employee_number === formData.employee_number && employee.full_name === selectedEmployee?.full_name,
-      )
+      // Submit the data
+      await onSubmit(formattedData)
 
-      if (existingAttendance) {
-        // Show toast notification for existing attendance
-        toast.error(`${selectedEmployee?.full_name}'s attendance for that day is existing already`)
-        setIsSubmitting(false)
-        return
-      }
-
-      onSubmit(formattedData)
+      // Only show success and close if the submission was successful
+      toast.success(`Attendance record added for ${employeeName}`)
+      onClose()
     } catch (error) {
-      console.error("Error adding attendance:", error)
+      console.error("Submission error:", error)
+
+      // Check for duplicate entry error
+      if (
+        error.message &&
+        error.message.includes("Duplicate entry") &&
+        error.message.includes("attendance_employee_number_work_date_unique")
+      ) {
+        toast.error(`An attendance record already exists for ${employeeName} on ${formData.work_date}`)
+      } else {
+        toast.error("Failed to add attendance record: " + (error.message || "Unknown error"))
+      }
     } finally {
       setIsSubmitting(false)
     }
@@ -189,20 +235,83 @@ const AddAttendanceModal = ({ onClose, onSubmit, employees }: AddAttendanceModal
 
           <div className="space-y-2">
             <Label htmlFor="status">Status</Label>
-            <Select
-              defaultValue={formData.status}
-              onValueChange={(value) => setFormData((prev) => ({ ...prev, status: value }))}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="Present">Present</SelectItem>
-                <SelectItem value="Absent">Absent</SelectItem>
-                <SelectItem value="Day Off">Day Off</SelectItem>
-                <SelectItem value="Holiday">Holiday</SelectItem>
-              </SelectContent>
-            </Select>
+            <div className="grid grid-cols-4 gap-2 mb-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className={`${formData.status === "Present" ? getStatusBadgeColor("Present") : ""}`}
+                onClick={() => setFormData((prev) => ({ ...prev, status: "Present" }))}
+              >
+                Present
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className={`${formData.status === "Absent" ? getStatusBadgeColor("Absent") : ""}`}
+                onClick={() => setFormData((prev) => ({ ...prev, status: "Absent" }))}
+              >
+                Absent
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className={`${formData.status === "Half Day" ? getStatusBadgeColor("Half Day") : ""}`}
+                onClick={() => setFormData((prev) => ({ ...prev, status: "Half Day" }))}
+              >
+                Half Day
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className={`${formData.status === "WFH" ? getStatusBadgeColor("WFH") : ""}`}
+                onClick={() => setFormData((prev) => ({ ...prev, status: "WFH" }))}
+              >
+                WFH
+              </Button>
+            </div>
+            <div className="grid grid-cols-4 gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className={`${formData.status === "Day Off" ? getStatusBadgeColor("Day Off") : ""}`}
+                onClick={() => setFormData((prev) => ({ ...prev, status: "Day Off" }))}
+              >
+                Day Off
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className={`${formData.status === "Leave" ? getStatusBadgeColor("Leave") : ""}`}
+                onClick={() => setFormData((prev) => ({ ...prev, status: "Leave" }))}
+              >
+                Leave
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className={`${formData.status === "Holiday" ? getStatusBadgeColor("Holiday") : ""}`}
+                onClick={() => setFormData((prev) => ({ ...prev, status: "Holiday" }))}
+              >
+                Holiday
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className={`${formData.status === "SP" ? getStatusBadgeColor("SP") : ""}`}
+                onClick={() => setFormData((prev) => ({ ...prev, status: "SP" }))}
+              >
+                SP
+              </Button>
+            </div>
+
             {errors.status && <p className="text-sm text-red-500">{errors.status}</p>}
           </div>
 

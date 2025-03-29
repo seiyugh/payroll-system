@@ -18,19 +18,19 @@ class DashboardController extends Controller
             // Get total employees
             $total_employees = Employee::count();
             
-            // Get pending payrolls
-            $pending_payrolls = PayrollEntry::where('status', 'pending')->count();
+            // Get pending payrolls with employee names
+            $pending_payrolls = PayrollEntry::where('status', 'pending')
+                ->with('employee')
+                ->count();
             
             // Get attendance summary
             $today = Carbon::today();
             
-            // Use a try-catch block specifically for the attendance query
             try {
                 $present_today = Attendance::where('work_date', $today)
                     ->where('status', 'Present')
                     ->count();
             } catch (\Exception $e) {
-                // If there's an error with the attendance table, set to 0
                 $present_today = 0;
             }
             
@@ -39,18 +39,36 @@ class DashboardController extends Controller
                 'ongoing' => $present_today
             ];
             
-            // Get upcoming pay dates
+            // Get upcoming pay dates with employee names
             $upcoming_pay_dates = PayrollEntry::where('status', 'pending')
+                ->with(['employee' => function($query) {
+                    $query->select('id', 'employee_number', 'first_name', 'last_name');
+                }])
+                ->orderBy('created_at', 'asc')
                 ->take(3)
-                ->get();
+                ->get()
+                ->map(function ($entry) {
+                    return [
+                        'id' => $entry->id,
+                        'employee_name' => $entry->employee ? $entry->employee->first_name . ' ' . $entry->employee->last_name : 'Unknown',
+                        'employee_number' => $entry->employee ? $entry->employee->employee_number : '',
+                        'date' => $entry->created_at ? $entry->created_at->format('Y-m-d') : null,
+                        'amount' => $entry->net_pay
+                    ];
+                });
             
-            // Get recent transactions
-            $recent_transactions = PayrollEntry::orderBy('created_at', 'desc')
+            // Get recent transactions with employee names
+            $recent_transactions = PayrollEntry::with(['employee' => function($query) {
+                    $query->select('id', 'employee_number', 'first_name', 'last_name');
+                }])
+                ->orderBy('created_at', 'desc')
                 ->take(5)
                 ->get()
                 ->map(function ($entry) {
                     return [
                         'payroll_entry_id' => $entry->id,
+                        'employee_name' => $entry->employee ? $entry->employee->first_name . ' ' . $entry->employee->last_name : 'Unknown',
+                        'employee_number' => $entry->employee ? $entry->employee->employee_number : '',
                         'date' => $entry->created_at ? $entry->created_at->format('Y-m-d') : date('Y-m-d'),
                         'amount' => $entry->net_pay,
                         'status' => $entry->status
@@ -129,7 +147,6 @@ class DashboardController extends Controller
                 'upcoming_tasks' => $upcoming_tasks
             ]);
         } catch (\Exception $e) {
-            // If there's an error, return a simplified dashboard with error message
             return Inertia::render('Dashboard', [
                 'error' => 'There was an error loading the dashboard data: ' . $e->getMessage(),
                 'total_employees' => Employee::count() ?: 0,
@@ -146,4 +163,3 @@ class DashboardController extends Controller
         }
     }
 }
-

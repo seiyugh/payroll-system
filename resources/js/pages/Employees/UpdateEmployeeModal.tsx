@@ -151,8 +151,7 @@ const UpdateEmployeeModal = ({ employee, onClose }: UpdateEmployeeModalProps) =>
       <DialogContent className="!w-max !h-max !max-w-[110vw] !max-h-[90vh] overflow-y-auto" >
         <DialogHeader className="flex flex-row items-center justify-between">
           <DialogTitle className="text-xl font-semibold">Edit Employee: {formData.full_name}</DialogTitle>
-          <Button variant="ghost" size="icon" onClick={onClose}>
-          </Button>
+
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-6">

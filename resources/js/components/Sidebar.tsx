@@ -6,6 +6,7 @@ import { LogOut, Moon, Sun, Menu, Home, Users, FileText, Calendar } from "lucide
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { useForm } from "@inertiajs/react"
+import { toast } from "sonner" // Add this import
 
 const Sidebar = ({ isOpen, toggleSidebar }) => {
   const { post } = useForm()
@@ -92,7 +93,21 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
         <Button
           variant="destructive"
           className="w-full mt-2 flex items-center justify-center gap-2 bg-red-600 transition-all duration-300"
-          onClick={() => post("/logout")}
+          onClick={() => {
+            post("/logout", {
+              onSuccess: () => {
+                // Clear any local storage items if needed
+                localStorage.removeItem("sidebarState")
+                localStorage.removeItem("theme")
+                // Redirect to login page
+                window.location.href = "/login"
+              },
+              onError: () => {
+                toast.error("Logout failed. Please try again.")
+              },
+            })
+          }}
+          
         >
           <LogOut className="h-5 w-5" />
           {isOpen ? "Log Out" : ""} {/* Removed hamburger icon */}

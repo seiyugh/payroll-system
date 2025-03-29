@@ -3,1058 +3,598 @@
 import type React from "react"
 
 import { useState, useEffect } from "react"
-import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { router } from "@inertiajs/react"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Card, CardContent } from "@/components/ui/card"
 import { toast } from "sonner"
-import { AlertCircle, Calendar, DollarSign, FileText, Info, Printer, User } from "lucide-react"
-import PrintPayslip from "./printPayslip"
-
-interface Payroll {
-  id: number
-  employee_number: string
-  full_name: string
-  payroll_period_id: number
-  gross_pay: string
-  net_pay: string
-  thirteenth_month_pay: string
-  ytd_earnings: string
-  sss_deduction: string | null
-  philhealth_deduction: string | null
-  pagibig_deduction: string | null
-  tax_deduction: string | null
-  other_deductions: string | null
-  cash_advance: string | null
-  loan: string | null
-  vat: string | null
-  status: string
-  created_at: string | null
-  updated_at: string | null
-  daily_rates: string | null | any[]
-  period_start: string | null
-  period_end: string | null
-  daily_rate: string | null
-  attendance_records: string | null | any[]
-  employee?: {
-    id: number
-    employee_number: string
-    full_name: string
-    department: string
-    position: string
-    daily_rate: number
-  }
-  payroll_period?: {
-    id: number
-    period_start: string
-    period_end: string
-    payment_date: string
-    status: string
-  }
-}
-
-interface PayrollPeriod {
-  id: number
-  period_start: string
-  period_end: string
-  payment_date: string
-  status: string
-  created_at: string | null
-  updated_at: string | null
-}
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 
 interface Employee {
   id: number
   employee_number: string
-  full_name: string
-  department: string
-  designation: string
-  daily_rate: number
+  first_name: string
+  last_name: string
+  daily_rate: string
+  department?: string
 }
 
-interface Attendance {
+interface PayrollPeriod {
+  id: number
+  week_id: number
+  period_start: string
+  period_end: string
+  payment_date: string
+  status: string
+}
+
+interface PayrollEntry {
   id: number
   employee_number: string
-  work_date: string
-  daily_rate: number
-  adjustment: number
+  full_name: string
+  week_id: number
+  daily_rate: string | number
+  gross_pay: string
+  sss_deduction: string
+  philhealth_deduction: string
+  pagibig_deduction: string
+  tax_deduction: string
+  cash_advance: string
+  loan: string
+  vat: string
+  other_deductions: string
+  total_deductions: string
+  net_pay: string
+  ytd_earnings: string
+  thirteenth_month_pay: string
   status: string
-  full_name?: string
+  short?: string
 }
 
 interface UpdatePayrollModalProps {
-  payroll: Payroll
+  payroll: PayrollEntry
   onClose: () => void
   employees: Employee[]
   payrollPeriods: PayrollPeriod[]
-  formatDailyRatesForSubmission?: (payroll: Payroll) => string
 }
 
-const UpdatePayrollModal = ({
-  payroll,
-  onClose,
-  employees,
-  payrollPeriods,
-  formatDailyRatesForSubmission,
-}: UpdatePayrollModalProps) => {
+const UpdatePayrollModal = ({ payroll, onClose, employees, payrollPeriods }: UpdatePayrollModalProps) => {
   const [formData, setFormData] = useState({
     id: payroll.id,
     employee_number: payroll.employee_number,
-    full_name: payroll.full_name,
-    payroll_period_id: payroll.payroll_period_id,
+    week_id: payroll.week_id,
+    daily_rate: payroll.daily_rate,
     gross_pay: payroll.gross_pay,
+    sss_deduction: payroll.sss_deduction,
+    philhealth_deduction: payroll.philhealth_deduction,
+    pagibig_deduction: payroll.pagibig_deduction,
+    tax_deduction: payroll.tax_deduction,
+    cash_advance: payroll.cash_advance,
+    loan: payroll.loan,
+    vat: payroll.vat,
+    other_deductions: payroll.other_deductions,
+    total_deductions: payroll.total_deductions,
     net_pay: payroll.net_pay,
-    thirteenth_month_pay: payroll.thirteenth_month_pay || "0",
-    ytd_earnings: payroll.ytd_earnings || "0",
-    sss_deduction: payroll.sss_deduction || "0",
-    philhealth_deduction: payroll.philhealth_deduction || "0",
-    pagibig_deduction: payroll.pagibig_deduction || "0",
-    tax_deduction: payroll.tax_deduction || "0",
-    other_deductions: payroll.other_deductions || "0",
-    cash_advance: payroll.cash_advance || "0",
-    loan: payroll.loan || "0",
-    vat: payroll.vat || "0",
+    ytd_earnings: payroll.ytd_earnings,
+    thirteenth_month_pay: payroll.thirteenth_month_pay,
     status: payroll.status,
-    attendance_records: payroll.attendance_records || null,
-    daily_rates: payroll.daily_rates || null,
+    short: payroll.short || "0",
   })
 
-  const [activeTab, setActiveTab] = useState<"details" | "deductions" | "attendance" | "preview">("details")
-  const [isLoading, setIsLoading] = useState(false)
-  const [attendanceRecords, setAttendanceRecords] = useState<Attendance[]>([])
-  const [isLoadingAttendance, setIsLoadingAttendance] = useState(true)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [errors, setErrors] = useState<Record<string, string>>({})
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null)
-  const [selectedPeriod, setSelectedPeriod] = useState<PayrollPeriod | null>(null)
-  const [isPrintModalOpen, setIsPrintModalOpen] = useState(false)
-  const [enrichedPayroll, setEnrichedPayroll] = useState<Payroll>(payroll)
+  const [isOpen, setIsOpen] = useState(true)
+  const [isAllenOne, setIsAllenOne] = useState(false)
 
-  // Fetch attendance records for this employee and payroll period
+  // Find the selected employee on component mount
   useEffect(() => {
-    const fetchAttendance = async () => {
-      setIsLoadingAttendance(true)
+    const employee = employees.find((emp) => emp.employee_number === payroll.employee_number)
+    setSelectedEmployee(employee || null)
+
+    // Check if employee is Allen One
+    if (employee) {
+      setIsAllenOne(employee.department?.toLowerCase() === "allen one")
+    }
+  }, [employees, payroll.employee_number])
+
+  // Calculate derived values when form data changes
+  useEffect(() => {
+    const calculatePayroll = () => {
       try {
-        // Find the selected employee and period
-        const employee = employees.find((emp) => emp.employee_number === payroll.employee_number) || null
-        const period = payrollPeriods.find((p) => p.id === payroll.payroll_period_id) || null
+        // Parse all numeric values
+        const dailyRate = Number.parseFloat(formData.daily_rate.toString() || "") || 0
+        const sss = Number.parseFloat(formData.sss_deduction) || 0
+        const philhealth = Number.parseFloat(formData.philhealth_deduction) || 0
+        const pagibig = Number.parseFloat(formData.pagibig_deduction) || 0
+        const tax = Number.parseFloat(formData.tax_deduction) || 0
+        const cashAdvance = Number.parseFloat(formData.cash_advance) || 0
+        const loan = Number.parseFloat(formData.loan) || 0
+        const vat = Number.parseFloat(formData.vat) || 0
+        const otherDeductions = Number.parseFloat(formData.other_deductions) || 0
 
-        setSelectedEmployee(employee)
-        setSelectedPeriod(period)
+        // Calculate gross pay (assuming 5 working days per week)
+        const grossPay = dailyRate * 5
 
-        // If we already have attendance records in the payroll, use those
-        if (payroll.attendance_records) {
-          try {
-            if (typeof payroll.attendance_records === "string") {
-              const parsed = JSON.parse(payroll.attendance_records)
-              if (Array.isArray(parsed) && parsed.length > 0) {
-                setAttendanceRecords(parsed)
-                setIsLoadingAttendance(false)
-                return
-              }
-            } else if (Array.isArray(payroll.attendance_records) && payroll.attendance_records.length > 0) {
-              setAttendanceRecords(payroll.attendance_records)
-              setIsLoadingAttendance(false)
-              return
-            }
-          } catch (e) {
-            console.error("Error parsing attendance records:", e)
-          }
-        }
+        // Calculate total deductions
+        const totalDeductions = sss + philhealth + pagibig + tax + cashAdvance + loan + vat + otherDeductions
 
-        // If we don't have attendance records or couldn't parse them, fetch from the API
-        if (period && employee) {
-          const response = await fetch(
-            `/attendance/fetch-for-payslip?employee_number=${employee.employee_number}&start_date=${period.period_start}&end_date=${period.period_end}`,
-          )
+        // Calculate net pay
+        const netPay = grossPay - totalDeductions
 
-          if (response.ok) {
-            const data = await response.json()
-            if (data && data.attendances && Array.isArray(data.attendances)) {
-              setAttendanceRecords(data.attendances)
-
-              // Update the formData with the fetched attendance records
-              setFormData((prev) => ({
-                ...prev,
-                attendance_records: JSON.stringify(data.attendances),
-              }))
-            } else {
-              // If no records found, create empty records for each day in the period
-              const start = new Date(period.period_start)
-              const end = new Date(period.period_end)
-              const emptyRecords = []
-
-              const currentDate = new Date(start)
-              while (currentDate <= end) {
-                emptyRecords.push({
-                  id: 0,
-                  employee_number: employee.employee_number,
-                  work_date: currentDate.toISOString().split("T")[0],
-                  daily_rate: employee.daily_rate,
-                  adjustment: 0,
-                  status: "No Record",
-                  full_name: employee.full_name,
-                })
-                currentDate.setDate(currentDate.getDate() + 1)
-              }
-
-              setAttendanceRecords(emptyRecords)
-
-              // Update the formData with the empty attendance records
-              setFormData((prev) => ({
-                ...prev,
-                attendance_records: JSON.stringify(emptyRecords),
-              }))
-            }
-          } else {
-            console.error("Failed to fetch attendance records")
-            toast.error("Failed to load attendance records")
-          }
-        }
+        // Update form data with calculated values
+        setFormData((prev) => ({
+          ...prev,
+          gross_pay: grossPay.toFixed(2),
+          total_deductions: totalDeductions.toFixed(2),
+          net_pay: netPay.toFixed(2),
+        }))
       } catch (error) {
-        console.error("Error fetching attendance:", error)
-        toast.error("Error loading attendance data")
-      } finally {
-        setIsLoadingAttendance(false)
+        console.error("Error calculating payroll:", error)
       }
     }
 
-    fetchAttendance()
-  }, [payroll, employees, payrollPeriods])
+    calculatePayroll()
+  }, [
+    formData.daily_rate,
+    formData.sss_deduction,
+    formData.philhealth_deduction,
+    formData.pagibig_deduction,
+    formData.tax_deduction,
+    formData.cash_advance,
+    formData.loan,
+    formData.vat,
+    formData.other_deductions,
+  ])
 
-  // Update enriched payroll when form data changes
-  useEffect(() => {
-    // Create an enriched payroll object that includes all the data needed for PrintPayslip
-    const updatedPayroll = {
-      ...payroll,
-      ...formData,
-      employee: selectedEmployee
-        ? {
-            ...selectedEmployee,
-            full_name: selectedEmployee.full_name,
-            department: selectedEmployee.department,
-            position: selectedEmployee.designation,
-            daily_rate: selectedEmployee.daily_rate,
-          }
-        : undefined,
-      payroll_period: selectedPeriod
-        ? {
-            ...selectedPeriod,
-            period_start: selectedPeriod.period_start,
-            period_end: selectedPeriod.period_end,
-          }
-        : undefined,
-      period_start: selectedPeriod?.period_start,
-      period_end: selectedPeriod?.period_end,
-    }
+  // Handle employee selection
+  const handleEmployeeChange = (value: string) => {
+    const employee = employees.find((emp) => emp.employee_number === value)
 
-    setEnrichedPayroll(updatedPayroll)
-  }, [formData, selectedEmployee, selectedPeriod, payroll])
+    // Check if employee is Allen One
+    const isAllen = employee?.department?.toLowerCase() === "allen one"
+    setIsAllenOne(isAllen)
 
-  // Calculate totals from attendance records
-  const attendanceTotals = {
-    presentDays: attendanceRecords.filter((record) => record.status === "Present").length,
-    absentDays: attendanceRecords.filter((record) => record.status === "Absent").length,
-    totalDailyRate: attendanceRecords.reduce((sum, record) => sum + Number(record.daily_rate), 0),
-    totalAdjustments: attendanceRecords.reduce((sum, record) => sum + Number(record.adjustment || 0), 0),
+    setFormData((prev) => ({
+      ...prev,
+      employee_number: value,
+      daily_rate: employee?.daily_rate || prev.daily_rate,
+      short: isAllen ? prev.short : "0", // Reset short if not Allen One
+    }))
+
+    setSelectedEmployee(employee || null)
   }
 
-  // Handle input changes
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-    const { name, value } = e.target
-    setFormData({
-      ...formData,
+  // Handle form input changes
+  const handleChange = (name: string, value: string) => {
+    setFormData((prev) => ({
+      ...prev,
       [name]: value,
-    })
-
-    // Recalculate net pay when deductions change
-    if (
-      [
-        "sss_deduction",
-        "philhealth_deduction",
-        "pagibig_deduction",
-        "tax_deduction",
-        "other_deductions",
-        "cash_advance",
-        "loan",
-        "vat",
-        "gross_pay",
-      ].includes(name)
-    ) {
-      const grossPay = Number.parseFloat(name === "gross_pay" ? value : formData.gross_pay)
-      const totalDeductions =
-        Number.parseFloat(name === "sss_deduction" ? value : formData.sss_deduction) +
-        Number.parseFloat(name === "philhealth_deduction" ? value : formData.philhealth_deduction) +
-        Number.parseFloat(name === "pagibig_deduction" ? value : formData.pagibig_deduction) +
-        Number.parseFloat(name === "tax_deduction" ? value : formData.tax_deduction) +
-        Number.parseFloat(name === "other_deductions" ? value : formData.other_deductions) +
-        Number.parseFloat(name === "cash_advance" ? value : formData.cash_advance) +
-        Number.parseFloat(name === "loan" ? value : formData.loan) +
-        Number.parseFloat(name === "vat" ? value : formData.vat)
-
-      const netPay = grossPay - totalDeductions
-      setFormData((prev) => ({
-        ...prev,
-        net_pay: netPay.toFixed(2),
-      }))
-    }
+    }))
   }
 
   // Handle form submission
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    setIsLoading(true)
+    setIsSubmitting(true)
 
-    // Prepare the data for submission
-    const submissionData = {
-      ...formData,
-      // Format daily rates if needed
-      daily_rates: formatDailyRatesForSubmission
-        ? formatDailyRatesForSubmission(enrichedPayroll)
-        : formData.daily_rates,
-      // Ensure attendance records are properly formatted
-      attendance_records:
-        typeof formData.attendance_records === "string"
-          ? formData.attendance_records
-          : JSON.stringify(formData.attendance_records || attendanceRecords),
-    }
-
-    router.put(`/payroll/${formData.id}`, submissionData, {
-      onSuccess: () => {
-        toast.success("Payroll updated successfully!")
-        setIsLoading(false)
-        onClose()
-      },
-      onError: (errors) => {
-        setIsLoading(false)
-        Object.values(errors).forEach((message) => {
-          toast.error(`Error: ${message}`)
-        })
-      },
-    })
-  }
-
-  // Format date for display
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString("en-US", {
-      weekday: "short",
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    })
-  }
-
-  // Format currency for display
-  const formatCurrency = (value: string | number) => {
-    const numValue = typeof value === "string" ? Number.parseFloat(value) : value
-    return numValue.toLocaleString("en-US", {
-      style: "currency",
-      currency: "PHP",
-      minimumFractionDigits: 2,
-    })
-  }
-
-  // Get status badge color
-  const getStatusBadgeColor = (status: string) => {
-    switch (status) {
-      case "Present":
-        return "bg-green-50 text-green-700 border-green-200 dark:bg-green-900/20 dark:text-green-400 dark:border-green-800"
-      case "Absent":
-        return "bg-red-50 text-red-700 border-red-200 dark:bg-red-900/20 dark:text-red-400 dark:border-red-800"
-      case "Day Off":
-        return "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/20 dark:text-blue-400 dark:border-blue-800"
-      case "Holiday":
-        return "bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-900/20 dark:text-purple-400 dark:border-purple-800"
-      case "Half Day":
-        return "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-800"
-      case "Leave":
-        return "bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-900/20 dark:text-indigo-400 dark:border-indigo-800"
-      case "No Record":
-        return "bg-gray-50 text-gray-700 border-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-700"
-      default:
-        return "bg-slate-50 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700"
-    }
-  }
-
-  // Handle attendance status update
-  const handleAttendanceStatusChange = (index: number, newStatus: string) => {
-    const updatedRecords = [...attendanceRecords]
-    updatedRecords[index].status = newStatus
-    setAttendanceRecords(updatedRecords)
-
-    // Update the formData with the updated attendance records
-    setFormData((prev) => ({
-      ...prev,
-      attendance_records: JSON.stringify(updatedRecords),
-    }))
-
-    // Recalculate gross pay based on updated attendance
-    recalculateGrossPay(updatedRecords)
-  }
-
-  // Handle attendance adjustment update
-  const handleAttendanceAdjustmentChange = (index: number, newAdjustment: number) => {
-    const updatedRecords = [...attendanceRecords]
-    updatedRecords[index].adjustment = newAdjustment
-    setAttendanceRecords(updatedRecords)
-
-    // Update the formData with the updated attendance records
-    setFormData((prev) => ({
-      ...prev,
-      attendance_records: JSON.stringify(updatedRecords),
-    }))
-
-    // Recalculate gross pay based on updated attendance
-    recalculateGrossPay(updatedRecords)
-  }
-
-  // Calculate amount based on status and daily rate (same as in PrintPayslip)
-  const calculateAmount = (status: string, dailyRate: number) => {
-    switch (status.toLowerCase()) {
-      case "present":
-        return dailyRate
-      case "half day":
-        return dailyRate / 2
-      case "absent":
-      case "day off":
-        return 0
-      case "holiday":
-        return dailyRate // Usually paid for holidays
-      case "leave":
-        return dailyRate // Paid leave
-      case "no record":
-        return 0 // No pay if no record
-      default:
-        return 0 // Default to 0 if status is unknown
-    }
-  }
-
-  // Recalculate gross pay based on attendance records
-  const recalculateGrossPay = (records: Attendance[]) => {
-    const totalPay = records.reduce((sum, record) => {
-      const amount = calculateAmount(record.status, Number(record.daily_rate))
-      const adjustment = Number(record.adjustment || 0)
-      return sum + amount + adjustment
-    }, 0)
-
-    setFormData((prev) => {
-      const updatedGrossPay = totalPay.toFixed(2)
-
-      // Calculate new net pay
-      const totalDeductions =
-        Number.parseFloat(prev.sss_deduction) +
-        Number.parseFloat(prev.philhealth_deduction) +
-        Number.parseFloat(prev.pagibig_deduction) +
-        Number.parseFloat(prev.tax_deduction) +
-        Number.parseFloat(prev.other_deductions) +
-        Number.parseFloat(prev.cash_advance) +
-        Number.parseFloat(prev.loan) +
-        Number.parseFloat(prev.vat)
-
-      const netPay = totalPay - totalDeductions
-
-      return {
-        ...prev,
-        gross_pay: updatedGrossPay,
-        net_pay: netPay.toFixed(2),
+    try {
+      // Prepare payload with proper number types
+      const payload = {
+        id: formData.id,
+        employee_number: formData.employee_number,
+        week_id: formData.week_id,
+        daily_rate: Number.parseFloat(formData.daily_rate.toString() || "0"),
+        gross_pay: Number.parseFloat(formData.gross_pay),
+        sss_deduction: Number.parseFloat(formData.sss_deduction),
+        philhealth_deduction: Number.parseFloat(formData.philhealth_deduction),
+        pagibig_deduction: Number.parseFloat(formData.pagibig_deduction),
+        tax_deduction: Number.parseFloat(formData.tax_deduction),
+        cash_advance: Number.parseFloat(formData.cash_advance || "0"),
+        loan: Number.parseFloat(formData.loan || "0"),
+        vat: Number.parseFloat(formData.vat || "0"),
+        other_deductions: Number.parseFloat(formData.other_deductions || "0"),
+        short: isAllenOne ? Number.parseFloat(formData.short || "0") : 0,
+        total_deductions: Number.parseFloat(formData.total_deductions),
+        net_pay: Number.parseFloat(formData.net_pay),
+        ytd_earnings: Number.parseFloat(formData.ytd_earnings || "0"),
+        thirteenth_month_pay: Number.parseFloat(formData.thirteenth_month_pay || "0"),
+        status: formData.status,
       }
-    })
+
+      console.log("Updating payroll with data:", payload)
+      console.log("Request URL:", `/payroll/${payroll.id}`)
+      console.log("Request Method: PUT")
+
+      // Send update request
+      router.put(`/payroll/${payroll.id}`, payload, {
+        onSuccess: (page) => {
+          console.log("Payroll update success response:", page)
+          toast.success("Payroll updated successfully!")
+          setIsSubmitting(false)
+          onClose()
+
+          // Force a refresh of the data
+          router.visit(window.location.pathname + window.location.search, {
+            only: ["payrollEntries", "payrollSummary"],
+            preserveScroll: true,
+            preserveState: false,
+          })
+        },
+        onError: (errors) => {
+          console.error("Update error:", errors)
+          Object.entries(errors).forEach(([field, message]) => {
+            toast.error(`${field}: ${message}`)
+          })
+          setIsSubmitting(false)
+        },
+        preserveState: true,
+        preserveScroll: true,
+      })
+    } catch (error) {
+      console.error("Submission error:", error)
+      toast.error("Failed to update payroll")
+      setIsSubmitting(false)
+    }
   }
 
-  // Open print preview
-  const openPrintPreview = () => {
-    setIsPrintModalOpen(true)
+  const calculateStandardDeductions = () => {
+    const grossPay = Number.parseFloat(formData.gross_pay) || 0
+    const deductions = calculateStandardDeductionsFn(grossPay)
+
+    setFormData((prev) => ({
+      ...prev,
+      sss_deduction: deductions.sss,
+      philhealth_deduction: deductions.philhealth,
+      pagibig_deduction: deductions.pagibig,
+      tax_deduction: deductions.tax,
+      // Recalculate totals
+      total_deductions: (
+        Number.parseFloat(deductions.sss) +
+        Number.parseFloat(deductions.philhealth) +
+        Number.parseFloat(deductions.pagibig) +
+        Number.parseFloat(deductions.tax) +
+        Number.parseFloat(prev.cash_advance || "0") +
+        Number.parseFloat(prev.loan || "0") +
+        Number.parseFloat(prev.vat || "0") +
+        Number.parseFloat(prev.other_deductions || "0")
+      ).toFixed(2),
+      net_pay: (
+        grossPay -
+        (Number.parseFloat(deductions.sss) +
+          Number.parseFloat(deductions.philhealth) +
+          Number.parseFloat(deductions.pagibig) +
+          Number.parseFloat(deductions.tax) +
+          Number.parseFloat(prev.cash_advance || "0") +
+          Number.parseFloat(prev.loan || "0") +
+          Number.parseFloat(prev.vat || "0") +
+          Number.parseFloat(prev.other_deductions || "0"))
+      ).toFixed(2),
+    }))
+
+    toast.success("Standard deductions calculated based on gross pay")
+  }
+
+  const calculateStandardDeductionsFn = (grossPay: number) => {
+    // Calculate SSS (Social Security System) contribution
+    let sss = 0
+    if (grossPay <= 3250) {
+      sss = 135
+    } else if (grossPay <= 3750) {
+      sss = 157.5
+    } // ... continue with all SSS brackets
+    else {
+      sss = 1125
+    }
+
+    // Calculate PhilHealth contribution (2% of gross pay with ceiling)
+    const philhealth = Math.min(grossPay * 0.02, 900) // Max 900 for 45,000+ salary
+
+    // Calculate Pag-IBIG contribution
+    const pagibig = grossPay < 1500 ? 100 : Math.min(grossPay * 0.02, 100)
+
+    // Calculate withholding tax
+    let tax = 0
+    const taxableIncome = grossPay - sss - philhealth - pagibig
+
+    if (taxableIncome <= 20833) {
+      tax = 0
+    } else if (taxableIncome <= 33332) {
+      tax = (taxableIncome - 20833) * 0.2
+    } else if (taxableIncome <= 66666) {
+      tax = 2500 + (taxableIncome - 33333) * 0.25
+    } else if (taxableIncome <= 166666) {
+      tax = 10833.33 + (taxableIncome - 66667) * 0.3
+    } else if (taxableIncome <= 666666) {
+      tax = 40833.33 + (taxableIncome - 166667) * 0.32
+    } else {
+      tax = 200833.33 + (taxableIncome - 666667) * 0.35
+    }
+
+    return {
+      sss: sss.toFixed(2),
+      philhealth: philhealth.toFixed(2),
+      pagibig: pagibig.toFixed(2),
+      tax: tax.toFixed(2),
+    }
+  }
+
+  const handleCloseModal = () => {
+    setIsOpen(false)
+    onClose()
   }
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex justify-center items-center z-50 overflow-y-auto p-4">
-      <div className="bg-white dark:bg-slate-900 rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto dark:text-white">
-        <div className="p-6">
-          <div className="flex justify-between items-center mb-6">
-            <h2 className="text-2xl font-bold">Update Payroll</h2>
-            <Button variant="ghost" onClick={onClose} className="h-8 w-8 p-0 rounded-full">
-              &times;
-            </Button>
-          </div>
+    <Dialog open={isOpen} onOpenChange={handleCloseModal}>
+      <DialogContent className="sm:max-w-[800px] max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Update Payroll Entry #{payroll.id}</DialogTitle>
+        </DialogHeader>
 
-          {/* Employee and Period Information */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-            <Card className="p-4 border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
-              <div className="flex items-start space-x-3">
-                <div className="p-2 rounded-full bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400">
-                  <User className="h-5 w-5" />
-                </div>
-                <div>
-                  <h3 className="font-semibold text-lg">{formData.full_name}</h3>
-                  <p className="text-sm text-slate-500 dark:text-slate-400">Employee #{formData.employee_number}</p>
-                  {selectedEmployee && (
-                    <>
-                      <p className="text-sm mt-1">
-                        <span className="text-slate-500 dark:text-slate-400">Department:</span>{" "}
-                        {selectedEmployee.department}
-                      </p>
-                      <p className="text-sm">
-                        <span className="text-slate-500 dark:text-slate-400">Position:</span>{" "}
-                        {selectedEmployee.designation}
-                      </p>
-                      <p className="text-sm">
-                        <span className="text-slate-500 dark:text-slate-400">Daily Rate:</span>{" "}
-                        {formatCurrency(selectedEmployee.daily_rate)}
-                      </p>
-                    </>
-                  )}
-                </div>
+        <form onSubmit={handleSubmit} className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Employee and Period Selection */}
+            <div className="space-y-4">
+              <div>
+                <Label htmlFor="employee_number">Employee</Label>
+                <Select value={formData.employee_number} onValueChange={handleEmployeeChange}>
+                  <SelectTrigger id="employee_number" className={errors.employee_number ? "border-red-500" : ""}>
+                    <SelectValue placeholder="Select Employee" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {employees.map((employee) => (
+                      <SelectItem key={employee.id} value={employee.employee_number}>
+                        {employee.employee_number} - {employee.first_name} {employee.last_name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {errors.employee_number && <p className="text-red-500 text-xs mt-1">{errors.employee_number}</p>}
               </div>
-            </Card>
 
-            <Card className="p-4 border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
-              <div className="flex items-start space-x-3">
-                <div className="p-2 rounded-full bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400">
-                  <Calendar className="h-5 w-5" />
-                </div>
-                <div>
-                  <h3 className="font-semibold text-lg">Payroll Period</h3>
-                  {selectedPeriod ? (
-                    <>
-                      <p className="text-sm text-slate-500 dark:text-slate-400">
-                        {formatDate(selectedPeriod.period_start)} to {formatDate(selectedPeriod.period_end)}
-                      </p>
-                      <p className="text-sm mt-1">
-                        <span className="text-slate-500 dark:text-slate-400">Payment Date:</span>{" "}
-                        {formatDate(selectedPeriod.payment_date)}
-                      </p>
-                      <p className="text-sm">
-                        <span className="text-slate-500 dark:text-slate-400">Status:</span>{" "}
-                        <span
-                          className={`font-medium ${selectedPeriod.status === "Open" ? "text-green-600 dark:text-green-400" : "text-amber-600 dark:text-amber-400"}`}
-                        >
-                          {selectedPeriod.status}
-                        </span>
-                      </p>
-                    </>
-                  ) : (
-                    <p className="text-sm text-slate-500 dark:text-slate-400">Loading period information...</p>
-                  )}
-                </div>
+              <div>
+                <Label htmlFor="week_id">Payroll Period (Week ID)</Label>
+                <Select value={formData.week_id.toString()} onValueChange={(value) => handleChange("week_id", value)}>
+                  <SelectTrigger id="week_id" className={errors.week_id ? "border-red-500" : ""}>
+                    <SelectValue placeholder="Select Period" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {payrollPeriods.map((period) => (
+                      <SelectItem key={period.id} value={period.week_id.toString()}>
+                        Week {period.week_id}: {new Date(period.period_start).toLocaleDateString()} -{" "}
+                        {new Date(period.period_end).toLocaleDateString()}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {errors.week_id && <p className="text-red-500 text-xs mt-1">{errors.week_id}</p>}
               </div>
-            </Card>
-          </div>
 
-          <form onSubmit={handleSubmit}>
-            <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as any)} className="mb-6">
-              <TabsList className="mb-4">
-                <TabsTrigger value="details">
-                  <DollarSign className="h-4 w-4 mr-2" />
-                  Payroll Details
-                </TabsTrigger>
-                <TabsTrigger value="deductions">
-                  <FileText className="h-4 w-4 mr-2" />
-                  Deductions
-                </TabsTrigger>
-                <TabsTrigger value="attendance">
-                  <Calendar className="h-4 w-4 mr-2" />
-                  Attendance Records
-                </TabsTrigger>
-                <TabsTrigger value="preview">
-                  <Printer className="h-4 w-4 mr-2" />
-                  Payslip Preview
-                </TabsTrigger>
-              </TabsList>
-
-              <TabsContent value="details" className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Gross Pay</label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-500">₱</span>
-                      <input
-                        type="number"
-                        name="gross_pay"
-                        step="0.01"
-                        required
-                        className="pl-8 p-2 border rounded w-full dark:bg-slate-800 dark:border-slate-700"
-                        value={formData.gross_pay}
-                        onChange={handleChange}
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Net Pay</label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-500">₱</span>
-                      <input
-                        type="number"
-                        name="net_pay"
-                        step="0.01"
-                        required
-                        className="pl-8 p-2 border rounded w-full bg-slate-50 dark:bg-slate-700 dark:border-slate-600"
-                        value={formData.net_pay}
-                        readOnly
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1">13th Month Pay</label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-500">₱</span>
-                      <input
-                        type="number"
-                        name="thirteenth_month_pay"
-                        step="0.01"
-                        className="pl-8 p-2 border rounded w-full dark:bg-slate-800 dark:border-slate-700"
-                        value={formData.thirteenth_month_pay}
-                        onChange={handleChange}
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1">YTD Earnings</label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-500">₱</span>
-                      <input
-                        type="number"
-                        name="ytd_earnings"
-                        step="0.01"
-                        className="pl-8 p-2 border rounded w-full dark:bg-slate-800 dark:border-slate-700"
-                        value={formData.ytd_earnings}
-                        onChange={handleChange}
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Status</label>
-                    <select
-                      name="status"
-                      required
-                      className="p-2 border rounded w-full dark:bg-slate-800 dark:border-slate-700"
-                      value={formData.status}
-                      onChange={handleChange}
-                    >
-                      <option value="Pending">Pending</option>
-                      <option value="Completed">Completed</option>
-                      <option value="Rejected">Rejected</option>
-                    </select>
-                  </div>
+              <div>
+                <Label htmlFor="daily_rate">Daily Rate</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">₱</span>
+                  <Input
+                    id="daily_rate"
+                    type="number"
+                    value={formData.daily_rate.toString()}
+                    onChange={(e) => handleChange("daily_rate", e.target.value)}
+                    step="0.01"
+                    className={`pl-8 ${errors.daily_rate ? "border-red-500" : ""}`}
+                  />
                 </div>
+                {errors.daily_rate && <p className="text-red-500 text-xs mt-1">{errors.daily_rate}</p>}
+              </div>
 
-                <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-lg mt-4">
-                  <div className="flex items-start">
-                    <Info className="h-5 w-5 text-blue-500 mr-2 mt-0.5" />
+              <div>
+                <Label htmlFor="status">Status</Label>
+                <Select value={formData.status} onValueChange={(value) => handleChange("status", value)}>
+                  <SelectTrigger id="status" className={errors.status ? "border-red-500" : ""}>
+                    <SelectValue placeholder="Select Status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="generated">Generated</SelectItem>
+                    <SelectItem value="approved">Approved</SelectItem>
+                    <SelectItem value="paid">Paid</SelectItem>
+                    <SelectItem value="pending">Pending</SelectItem>
+                  </SelectContent>
+                </Select>
+                {errors.status && <p className="text-red-500 text-xs mt-1">{errors.status}</p>}
+              </div>
+
+              <Card className="bg-indigo-50 dark:bg-indigo-900/20 border-indigo-100 dark:border-indigo-800">
+                <CardContent className="p-4">
+                  <h3 className="font-medium text-indigo-700 dark:text-indigo-300 mb-2">Payroll Summary</h3>
+                  <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <h4 className="font-medium text-blue-700 dark:text-blue-400">Payroll Summary</h4>
-                      <p className="text-sm text-blue-600 dark:text-blue-300 mt-1">
-                        This payroll covers {attendanceTotals.presentDays} working days with a total daily rate of{" "}
-                        {formatCurrency(attendanceTotals.totalDailyRate)}. Adjustments total{" "}
-                        {formatCurrency(attendanceTotals.totalAdjustments)}.
-                      </p>
+                      <p className="text-sm text-indigo-600 dark:text-indigo-400">Gross Pay:</p>
+                      <p className="font-bold text-indigo-700 dark:text-indigo-300">₱{formData.gross_pay}</p>
                     </div>
-                  </div>
-                </div>
-              </TabsContent>
-
-              <TabsContent value="deductions" className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium mb-1">SSS Deduction</label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-500">₱</span>
-                      <input
-                        type="number"
-                        name="sss_deduction"
-                        step="0.01"
-                        className="pl-8 p-2 border rounded w-full dark:bg-slate-800 dark:border-slate-700"
-                        value={formData.sss_deduction}
-                        onChange={handleChange}
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1">PhilHealth Deduction</label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-500">₱</span>
-                      <input
-                        type="number"
-                        name="philhealth_deduction"
-                        step="0.01"
-                        className="pl-8 p-2 border rounded w-full dark:bg-slate-800 dark:border-slate-700"
-                        value={formData.philhealth_deduction}
-                        onChange={handleChange}
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Pag-IBIG Deduction</label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-500">₱</span>
-                      <input
-                        type="number"
-                        name="pagibig_deduction"
-                        step="0.01"
-                        className="pl-8 p-2 border rounded w-full dark:bg-slate-800 dark:border-slate-700"
-                        value={formData.pagibig_deduction}
-                        onChange={handleChange}
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Tax Deduction</label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-500">₱</span>
-                      <input
-                        type="number"
-                        name="tax_deduction"
-                        step="0.01"
-                        className="pl-8 p-2 border rounded w-full dark:bg-slate-800 dark:border-slate-700"
-                        value={formData.tax_deduction}
-                        onChange={handleChange}
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Cash Advance</label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-500">₱</span>
-                      <input
-                        type="number"
-                        name="cash_advance"
-                        step="0.01"
-                        className="pl-8 p-2 border rounded w-full dark:bg-slate-800 dark:border-slate-700"
-                        value={formData.cash_advance}
-                        onChange={handleChange}
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Loan</label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-500">₱</span>
-                      <input
-                        type="number"
-                        name="loan"
-                        step="0.01"
-                        className="pl-8 p-2 border rounded w-full dark:bg-slate-800 dark:border-slate-700"
-                        value={formData.loan}
-                        onChange={handleChange}
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1">VAT</label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-500">₱</span>
-                      <input
-                        type="number"
-                        name="vat"
-                        step="0.01"
-                        className="pl-8 p-2 border rounded w-full dark:bg-slate-800 dark:border-slate-700"
-                        value={formData.vat}
-                        onChange={handleChange}
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Other Deductions</label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-500">₱</span>
-                      <input
-                        type="number"
-                        name="other_deductions"
-                        step="0.01"
-                        className="pl-8 p-2 border rounded w-full dark:bg-slate-800 dark:border-slate-700"
-                        value={formData.other_deductions}
-                        onChange={handleChange}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="mt-4 p-4 border rounded-lg bg-slate-50 dark:bg-slate-800 dark:border-slate-700">
-                  <h4 className="font-medium mb-3">Deductions Summary</h4>
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span>SSS:</span>
-                      <span>{formatCurrency(formData.sss_deduction)}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span>PhilHealth:</span>
-                      <span>{formatCurrency(formData.philhealth_deduction)}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span>Pag-IBIG:</span>
-                      <span>{formatCurrency(formData.pagibig_deduction)}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span>Tax:</span>
-                      <span>{formatCurrency(formData.tax_deduction)}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span>Cash Advance:</span>
-                      <span>{formatCurrency(formData.cash_advance)}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span>Loan:</span>
-                      <span>{formatCurrency(formData.loan)}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span>VAT:</span>
-                      <span>{formatCurrency(formData.vat)}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span>Other:</span>
-                      <span>{formatCurrency(formData.other_deductions)}</span>
-                    </div>
-                    <div className="border-t pt-2 mt-2 flex justify-between font-medium">
-                      <span>Total Deductions:</span>
-                      <span>
-                        {formatCurrency(
-                          Number.parseFloat(formData.sss_deduction) +
-                            Number.parseFloat(formData.philhealth_deduction) +
-                            Number.parseFloat(formData.pagibig_deduction) +
-                            Number.parseFloat(formData.tax_deduction) +
-                            Number.parseFloat(formData.cash_advance) +
-                            Number.parseFloat(formData.loan) +
-                            Number.parseFloat(formData.vat) +
-                            Number.parseFloat(formData.other_deductions),
-                        )}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </TabsContent>
-
-              <TabsContent value="attendance" className="space-y-4">
-                {isLoadingAttendance ? (
-                  <div className="flex justify-center py-8">
-                    <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-indigo-500"></div>
-                  </div>
-                ) : attendanceRecords.length > 0 ? (
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full border-collapse">
-                      <thead>
-                        <tr className="bg-slate-100 dark:bg-slate-800">
-                          <th className="py-2 px-4 text-left font-medium text-slate-600 dark:text-slate-300">Date</th>
-                          <th className="py-2 px-4 text-left font-medium text-slate-600 dark:text-slate-300">Status</th>
-                          <th className="py-2 px-4 text-left font-medium text-slate-600 dark:text-slate-300">
-                            Daily Rate
-                          </th>
-                          <th className="py-2 px-4 text-left font-medium text-slate-600 dark:text-slate-300">
-                            Adjustment
-                          </th>
-                          <th className="py-2 px-4 text-left font-medium text-slate-600 dark:text-slate-300">Total</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {attendanceRecords.map((record, index) => {
-                          const amount = calculateAmount(record.status, Number(record.daily_rate))
-                          const adjustment = Number(record.adjustment || 0)
-                          const total = amount + adjustment
-
-                          return (
-                            <tr
-                              key={index}
-                              className="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/50"
-                            >
-                              <td className="py-2 px-4">{formatDate(record.work_date)}</td>
-                              <td className="py-2 px-4">
-                                <select
-                                  value={record.status}
-                                  onChange={(e) => handleAttendanceStatusChange(index, e.target.value)}
-                                  className="p-1 border rounded bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-xs"
-                                >
-                                  <option value="Present">Present</option>
-                                  <option value="Absent">Absent</option>
-                                  <option value="Half Day">Half Day</option>
-                                  <option value="Day Off">Day Off</option>
-                                  <option value="Leave">Leave</option>
-                                  <option value="Holiday">Holiday</option>
-                                  <option value="No Record">No Record</option>
-                                </select>
-                              </td>
-                              <td className="py-2 px-4">{formatCurrency(record.daily_rate)}</td>
-                              <td className="py-2 px-4">
-                                <div className="relative">
-                                  <span className="absolute left-2 top-1/2 transform -translate-y-1/2 text-slate-500 text-xs">
-                                    ₱
-                                  </span>
-                                  <input
-                                    type="number"
-                                    value={record.adjustment || 0}
-                                    onChange={(e) => handleAttendanceAdjustmentChange(index, Number(e.target.value))}
-                                    className="pl-6 p-1 border rounded w-24 text-xs"
-                                    step="0.01"
-                                  />
-                                </div>
-                              </td>
-                              <td className="py-2 px-4">{formatCurrency(total)}</td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                      <tfoot>
-                        <tr className="bg-slate-50 dark:bg-slate-800/70 font-medium">
-                          <td className="py-2 px-4" colSpan={2}>
-                            Total
-                          </td>
-                          <td className="py-2 px-4">{formatCurrency(attendanceTotals.totalDailyRate)}</td>
-                          <td className="py-2 px-4">{formatCurrency(attendanceTotals.totalAdjustments)}</td>
-                          <td className="py-2 px-4">
-                            {formatCurrency(
-                              attendanceRecords.reduce((sum, record) => {
-                                const amount = calculateAmount(record.status, Number(record.daily_rate))
-                                const adjustment = Number(record.adjustment || 0)
-                                return sum + amount + adjustment
-                              }, 0),
-                            )}
-                          </td>
-                        </tr>
-                      </tfoot>
-                    </table>
-                  </div>
-                ) : (
-                  <div className="text-center py-8 bg-slate-50 dark:bg-slate-800/50 rounded-lg">
-                    <AlertCircle className="h-12 w-12 mx-auto text-slate-400 mb-2" />
-                    <p className="text-slate-600 dark:text-slate-400">No attendance records found for this period.</p>
-                  </div>
-                )}
-
-                <div className="bg-amber-50 dark:bg-amber-900/20 p-4 rounded-lg mt-4">
-                  <div className="flex items-start">
-                    <Info className="h-5 w-5 text-amber-500 mr-2 mt-0.5" />
                     <div>
-                      <h4 className="font-medium text-amber-700 dark:text-amber-400">Attendance Summary</h4>
-                      <p className="text-sm text-amber-600 dark:text-amber-300 mt-1">
-                        This employee has {attendanceTotals.presentDays} present days and {attendanceTotals.absentDays}{" "}
-                        absent days during this payroll period.
-                      </p>
+                      <p className="text-sm text-indigo-600 dark:text-indigo-400">Total Deductions:</p>
+                      <p className="font-bold text-indigo-700 dark:text-indigo-300">₱{formData.total_deductions}</p>
+                    </div>
+                    <div className="col-span-2">
+                      <p className="text-sm text-indigo-600 dark:text-indigo-400">Net Pay:</p>
+                      <p className="font-bold text-lg text-indigo-700 dark:text-indigo-300">₱{formData.net_pay}</p>
                     </div>
                   </div>
-                </div>
-              </TabsContent>
-
-              <TabsContent value="preview" className="space-y-4">
-                <div className="flex justify-end mb-4">
-                  <Button
-                    type="button"
-                    onClick={openPrintPreview}
-                    className="flex items-center gap-1 bg-blue-600 hover:bg-blue-700 text-white"
-                  >
-                    <Printer className="h-4 w-4" />
-                    Open Print View
-                  </Button>
-                </div>
-
-                <div className="border rounded-lg p-4 bg-slate-50 dark:bg-slate-800/50">
-                  <h3 className="font-semibold text-lg mb-4">Payslip Preview</h3>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                    <div>
-                      <h4 className="font-medium text-sm mb-2">Employee Information</h4>
-                      <div className="space-y-1 text-sm">
-                        <p>
-                          <span className="font-medium">Name:</span> {formData.full_name}
-                        </p>
-                        <p>
-                          <span className="font-medium">Employee #:</span> {formData.employee_number}
-                        </p>
-                        {selectedEmployee && (
-                          <>
-                            <p>
-                              <span className="font-medium">Department:</span> {selectedEmployee.department}
-                            </p>
-                            <p>
-                              <span className="font-medium">Position:</span> {selectedEmployee.designation}
-                            </p>
-                          </>
-                        )}
-                      </div>
-                    </div>
-
-                    <div>
-                      <h4 className="font-medium text-sm mb-2">Payroll Information</h4>
-                      <div className="space-y-1 text-sm">
-                        {selectedPeriod && (
-                          <p>
-                            <span className="font-medium">Period:</span> {formatDate(selectedPeriod.period_start)} to{" "}
-                            {formatDate(selectedPeriod.period_end)}
-                          </p>
-                        )}
-                        <p>
-                          <span className="font-medium">Gross Pay:</span> {formatCurrency(formData.gross_pay)}
-                        </p>
-                        <p>
-                          <span className="font-medium">Total Deductions:</span>{" "}
-                          {formatCurrency(
-                            Number.parseFloat(formData.sss_deduction) +
-                              Number.parseFloat(formData.philhealth_deduction) +
-                              Number.parseFloat(formData.pagibig_deduction) +
-                              Number.parseFloat(formData.tax_deduction) +
-                              Number.parseFloat(formData.cash_advance) +
-                              Number.parseFloat(formData.loan) +
-                              Number.parseFloat(formData.vat) +
-                              Number.parseFloat(formData.other_deductions),
-                          )}
-                        </p>
-                        <p className="font-bold">
-                          <span className="font-medium">Net Pay:</span> {formatCurrency(formData.net_pay)}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="mt-6">
-                    <h4 className="font-medium text-sm mb-2">Attendance Summary</h4>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
-                      <div className="p-2 bg-white dark:bg-slate-900 rounded border">
-                        <p className="font-medium">Present Days</p>
-                        <p className="text-lg">{attendanceTotals.presentDays}</p>
-                      </div>
-                      <div className="p-2 bg-white dark:bg-slate-900 rounded border">
-                        <p className="font-medium">Absent Days</p>
-                        <p className="text-lg">{attendanceTotals.absentDays}</p>
-                      </div>
-                      <div className="p-2 bg-white dark:bg-slate-900 rounded border">
-                        <p className="font-medium">Total Daily Rate</p>
-                        <p className="text-lg">{formatCurrency(attendanceTotals.totalDailyRate)}</p>
-                      </div>
-                      <div className="p-2 bg-white dark:bg-slate-900 rounded border">
-                        <p className="font-medium">Total Adjustments</p>
-                        <p className="text-lg">{formatCurrency(attendanceTotals.totalAdjustments)}</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </TabsContent>
-            </Tabs>
-
-            <div className="flex justify-end space-x-3 mt-6">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={onClose}
-                className="border-slate-300 text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800"
-              >
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                disabled={isLoading}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white transition-all duration-200"
-              >
-                {isLoading ? (
-                  <>
-                    <div className="animate-spin mr-2 h-4 w-4 border-2 border-white border-t-transparent rounded-full"></div>
-                    Updating...
-                  </>
-                ) : (
-                  "Update Payroll"
-                )}
-              </Button>
+                </CardContent>
+              </Card>
             </div>
-          </form>
-        </div>
-      </div>
 
-      {/* Print Payslip Modal */}
-      {isPrintModalOpen && <PrintPayslip payroll={enrichedPayroll} onClose={() => setIsPrintModalOpen(false)} />}
-    </div>
+            {/* Deductions */}
+            <div className="space-y-4">
+              <div className="flex justify-between items-center">
+                <h3 className="font-medium">Deductions</h3>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={calculateStandardDeductions}
+                  className="text-xs border-indigo-200 text-indigo-600 hover:border-indigo-300 dark:border-indigo-800 dark:text-indigo-400 dark:hover:border-indigo-700"
+                >
+                  Calculate Standard Deductions
+                </Button>
+              </div>
+
+              <div>
+                <Label htmlFor="sss_deduction">SSS</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">₱</span>
+                  <Input
+                    id="sss_deduction"
+                    type="number"
+                    value={formData.sss_deduction}
+                    onChange={(e) => handleChange("sss_deduction", e.target.value)}
+                    step="0.01"
+                    className="pl-8"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <Label htmlFor="philhealth_deduction">PhilHealth</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">₱</span>
+                  <Input
+                    id="philhealth_deduction"
+                    type="number"
+                    value={formData.philhealth_deduction}
+                    onChange={(e) => handleChange("philhealth_deduction", e.target.value)}
+                    step="0.01"
+                    className="pl-8"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <Label htmlFor="pagibig_deduction">Pag-IBIG</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">₱</span>
+                  <Input
+                    id="pagibig_deduction"
+                    type="number"
+                    value={formData.pagibig_deduction}
+                    onChange={(e) => handleChange("pagibig_deduction", e.target.value)}
+                    step="0.01"
+                    className="pl-8"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <Label htmlFor="tax_deduction">Tax</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">₱</span>
+                  <Input
+                    id="tax_deduction"
+                    type="number"
+                    value={formData.tax_deduction}
+                    onChange={(e) => handleChange("tax_deduction", e.target.value)}
+                    step="0.01"
+                    className="pl-8"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <Label htmlFor="cash_advance">Cash Advance</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">₱</span>
+                  <Input
+                    id="cash_advance"
+                    type="number"
+                    value={formData.cash_advance}
+                    onChange={(e) => handleChange("cash_advance", e.target.value)}
+                    step="0.01"
+                    className="pl-8"
+                  />
+                </div>
+              </div>
+
+              {isAllenOne && (
+                <div>
+                  <Label htmlFor="short">Short</Label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">₱</span>
+                    <Input
+                      id="short"
+                      type="number"
+                      value={formData.short || "0"}
+                      onChange={(e) => handleChange("short", e.target.value)}
+                      step="0.01"
+                      className="pl-8"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <Label htmlFor="loan">Loan</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">₱</span>
+                  <Input
+                    id="loan"
+                    type="number"
+                    value={formData.loan}
+                    onChange={(e) => handleChange("loan", e.target.value)}
+                    step="0.01"
+                    className="pl-8"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <Label htmlFor="vat">VAT</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">₱</span>
+                  <Input
+                    id="vat"
+                    type="number"
+                    value={formData.vat}
+                    onChange={(e) => handleChange("vat", e.target.value)}
+                    step="0.01"
+                    className="pl-8"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <Label htmlFor="other_deductions">Other Deductions</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">₱</span>
+                  <Input
+                    id="other_deductions"
+                    type="number"
+                    value={formData.other_deductions}
+                    onChange={(e) => handleChange("other_deductions", e.target.value)}
+                    step="0.01"
+                    className="pl-8"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter className="pt-4 border-t border-gray-200 dark:border-gray-700">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleCloseModal}
+              className="border-gray-300 text-gray-600 hover:border-gray-400 dark:border-gray-600 dark:text-gray-300 dark:hover:border-gray-500"
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={isSubmitting} className="bg-indigo-600 hover:bg-indigo-700 text-white">
+              {isSubmitting ? "Updating..." : "Update Payroll Entry"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }
 

@@ -45,7 +45,7 @@ class LoginRequest extends FormRequest
     $this->ensureIsNotRateLimited();
 
     // Find user by employee_number
-    $user = User::where('employee_number', $this->input('employee_number'))->first();
+    $user = User::whereRaw("BINARY employee_number = ?", [$request->input('employee_number')])->first();
 
     if (!$user || !Hash::check($this->input('password'), $user->password_hash)) {
         RateLimiter::hit($this->throttleKey());

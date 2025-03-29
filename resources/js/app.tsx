@@ -5,7 +5,7 @@ import { createRoot } from "react-dom/client"
 import { initializeTheme } from "./hooks/use-appearance"
 import { Toaster } from "sonner" // ✅ Use Sonner for toasts
 
-const appName = import.meta.env.VITE_APP_NAME || "Aicom"
+const appName = import.meta.env.VITE_APP_NAME || "AICOM Marketing Services"
 
 createInertiaApp({
   title: (title) => `${title} - ${appName}`,

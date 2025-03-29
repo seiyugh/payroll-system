@@ -2,8 +2,8 @@
 
 import React from "react"
 
-import { Head, router } from "@inertiajs/react"
-import { useState, useEffect, useMemo } from "react"
+import { Head, router, usePage } from "@inertiajs/react"
+import { useState, useEffect, useMemo, useCallback } from "react"
 import AppLayout from "@/layouts/app-layout"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -45,6 +45,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
+import { debounce } from "lodash"
 
 interface Attendance {
   id: number
@@ -78,10 +79,24 @@ interface PayrollPeriod {
   period_end: string
   payment_date: string
   status: string
+  week_id?: number
 }
 
 interface AttendanceIndexProps {
-  attendances?: Attendance[]
+  attendances?: {
+    data: Attendance[]
+    current_page: number
+    last_page: number
+    per_page: number
+    total: number
+    from: number | null
+    to: number | null
+    links: {
+      url: string | null
+      label: string
+      active: boolean
+    }[]
+  }
   employees?: Employee[]
   payrollPeriods?: PayrollPeriod[]
 }
@@ -151,10 +166,18 @@ const SimpleChart = ({ data, labels, color = "#4f46e5" }) => {
   return <canvas ref={canvasRef} width={300} height={150} className="w-full h-auto" />
 }
 
-const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = [] }: AttendanceIndexProps) => {
-  const [searchTerm, setSearchTerm] = useState("")
-  const [statusFilter, setStatusFilter] = useState<string | null>(null)
-  const [dateFilter, setDateFilter] = useState<string | null>(null)
+const AttendanceIndex = ({
+  attendances = { data: [], current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null, links: [] },
+  employees = [],
+  payrollPeriods = [],
+}: AttendanceIndexProps) => {
+  // At the top of the component, add:
+  const { filters } = usePage().props
+
+  // Then in your useState initializations:
+  const [searchTerm, setSearchTerm] = useState(filters?.search || "")
+  const [statusFilter, setStatusFilter] = useState(filters?.status || null)
+  const [dateFilter, setDateFilter] = useState(filters?.date || null)
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false)
   const [isBulkAddModalOpen, setIsBulkAddModalOpen] = useState(false)
@@ -208,7 +231,7 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
   const [periodDateFilter, setPeriodDateFilter] = useState<string>("")
 
   // Use actual data
-  const attendanceData = attendances || []
+  const attendanceData = attendances.data || []
 
   // Debug function to check data
   useEffect(() => {
@@ -536,75 +559,63 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
   // Generate payroll from attendance
   const handleGeneratePayroll = () => {
     if (!selectedPayrollPeriod) {
-      toast.error("Please select a payroll period")
-      return
+      // Auto-select the first period if none is selected but periods exist
+      if (payrollPeriods.length > 0) {
+        setSelectedPayrollPeriod(payrollPeriods[0].id.toString())
+      } else {
+        toast.error("Please select a payroll period")
+        return
+      }
     }
 
     setIsGeneratingPayroll(true)
 
-    // Get the selected period details
-    const selectedPeriod = payrollPeriods.find((p) => p.id.toString() === selectedPayrollPeriod)
-    if (!selectedPeriod) {
-      toast.error("Invalid payroll period selected")
-      setIsGeneratingPayroll(false)
-      return
-    }
+    // Use the existing payroll period data
+    const selectedPeriodData = payrollPeriods.find((p) => p.id.toString() === selectedPayrollPeriod)
 
-    // Get all attendance records for the selected period
-    const periodStart = new Date(selectedPeriod.period_start)
-    const periodEnd = new Date(selectedPeriod.period_end)
-
-    // Filter attendance records for this period
-    const periodAttendance = attendanceData.filter((record) => {
-      const recordDate = new Date(record.work_date || record.date)
-      return recordDate >= periodStart && recordDate <= periodEnd
-    })
-
-    // Prepare the payload with attendance data
+    // Debug the payload being sent
     const payload = {
       payroll_period_id: selectedPayrollPeriod,
+      week_id: selectedPeriodData?.week_id,
       include_daily_rates: true,
       respect_attendance_status: true,
-      attendance_records: periodAttendance, // Include the actual attendance records
-      overwrite_existing: overwriteExisting, // Add flag to overwrite existing records
+      overwrite_existing: overwriteExisting,
     }
 
+    console.log("Generating payroll with payload:", payload)
+
+    // Use Inertia.js post instead of axios
     router.post("/payroll/generate-from-attendance", payload, {
-      preserveScroll: true, // Add this to prevent scrolling to top
-      onSuccess: () => {
+      preserveScroll: true,
+      onSuccess: (page) => {
+        console.log("Payroll generation successful", page)
         toast.success("Payroll generated successfully!")
         setShowGeneratePayrollDialog(false)
         setSelectedPayrollPeriod("")
         setOverwriteExisting(false)
-        // Redirect to payroll page to see the generated entries
-        router.get(`/payroll?period=${selectedPayrollPeriod}`)
-      },
-      onError: (errorResponse) => {
-        console.error("Generate payroll error response:", errorResponse)
 
-        if (errorResponse?.errors) {
-          // Laravel validation errors
-          Object.values(errorResponse.errors)
-            .flat()
-            .forEach((message) => {
-              toast.error(`Error: ${message}`)
-            })
-        } else if (errorResponse?.message) {
-          // Generic error message
-          toast.error(`Error: ${errorResponse.message}`)
-        } else {
-          // Fallback error message
-          toast.error("An unexpected error occurred while generating payroll.")
-        }
+        // Redirect to payroll page to see the generated entries
+        router.visit(`/payroll?period=${selectedPayrollPeriod}`)
       },
-      onFinish: () => {
+      onError: (errors) => {
+        console.error("Generate payroll error:", errors)
+
+        // Handle validation errors
+        if (errors.message) {
+          toast.error(`Error: ${errors.message}`)
+        } else {
+          Object.values(errors).forEach((message) => {
+            toast.error(`Error: ${message}`)
+          })
+        }
+
         setIsGeneratingPayroll(false)
       },
     })
   }
 
   // Handle drag start for attendance status
-  const handleDragStart = (e, attendance) => {
+  const handleDragStart = (e: React.DragEvent<HTMLDivElement>, attendance: any) => {
     setIsDragging(true)
     setDraggedAttendance(attendance)
     e.dataTransfer.setData("text/plain", JSON.stringify(attendance))
@@ -612,13 +623,13 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
   }
 
   // Handle drag over
-  const handleDragOver = (e) => {
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault()
     e.dataTransfer.dropEffect = "move"
   }
 
   // Handle drop for changing attendance status
-  const handleDrop = (e, newStatus) => {
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>, newStatus: string) => {
     e.preventDefault()
     setIsDragging(false)
 
@@ -640,13 +651,17 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
       case "Absent":
         return "bg-red-50 text-red-700 border-red-200 dark:bg-red-900/20 dark:text-red-400 dark:border-red-800"
       case "Day Off":
-        return "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/20 dark:text-blue-400 dark:border-blue-800"
+        return "bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-900/20 dark:text-sky-400 dark:border-sky-800"
       case "Holiday":
-        return "bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-900/20 dark:text-purple-400 dark:border-purple-800"
+        return "bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-900/20 dark:text-violet-400 dark:border-violet-800"
       case "Half Day":
-        return "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-800"
+        return "bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-900/20 dark:text-orange-400 dark:border-orange-800"
       case "Leave":
-        return "bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-900/20 dark:text-indigo-400 dark:border-indigo-800"
+        return "bg-cyan-50 text-cyan-700 border-cyan-200 dark:bg-cyan-900/20 dark:text-cyan-400 dark:border-cyan-800"
+      case "WFH":
+        return "bg-yellow-50 text-yellow-700 border-yellow-200 dark:bg-yellow-900/20 dark:text-yellow-400 dark:border-yellow-800"
+      case "SP":
+        return "bg-pink-50 text-pink-700 border-pink-200 dark:bg-pink-900/20 dark:text-pink-400 dark:border-yellow-800"
       default:
         return "bg-slate-50 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700"
     }
@@ -699,7 +714,7 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
 
   // Filter and sort attendances
   const filteredAttendances = useMemo(() => {
-    return attendanceData
+    return (attendances.data || [])
       .filter((attendance) => {
         const matchesSearch =
           attendance.employee_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -727,15 +742,15 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
         if (aValue > bValue) return sortDirection === "asc" ? 1 : -1
         return 0
       })
-  }, [attendanceData, searchTerm, statusFilter, dateFilter, sortField, sortDirection])
+  }, [attendances.data, searchTerm, statusFilter, dateFilter, sortField, sortDirection])
 
   // Pagination
-  const paginatedAttendances = useMemo(() => {
-    const startIndex = (currentPage - 1) * itemsPerPage
-    return filteredAttendances.slice(startIndex, startIndex + itemsPerPage)
-  }, [filteredAttendances, currentPage, itemsPerPage])
+  // const paginatedAttendances = useMemo(() => {
+  //   const startIndex = (currentPage - 1) * itemsPerPage
+  //   return filteredAttendances.slice(startIndex, startIndex + itemsPerPage)
+  // }, [filteredAttendances, currentPage, itemsPerPage])
 
-  const totalPages = Math.ceil(filteredAttendances.length / itemsPerPage)
+  // const totalPages = Math.ceil(filteredAttendances.length / itemsPerPage)
 
   // Toggle sort
   const toggleSort = (field: string) => {
@@ -747,11 +762,38 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
     }
   }
 
-  // Clear all filters
+  // Handle search and filter
+  const handleSearch = (e) => {
+    setSearchTerm(e.target.value)
+    debouncedSearch(e.target.value)
+  }
+
+  const debouncedSearch = useCallback(
+    debounce((value) => {
+      router.get("/attendance", { search: value, status: statusFilter, date: dateFilter }, { preserveScroll: true })
+    }, 500),
+    [statusFilter, dateFilter],
+  )
+
+  const handleStatusFilter = (value) => {
+    setStatusFilter(value || null)
+    router.get("/attendance", { search: searchTerm, status: value || null, date: dateFilter }, { preserveScroll: true })
+  }
+
+  const handleDateFilter = (value) => {
+    setDateFilter(value || null)
+    router.get(
+      "/attendance",
+      { search: searchTerm, status: statusFilter, date: value || null },
+      { preserveScroll: true },
+    )
+  }
+
   const clearFilters = () => {
     setSearchTerm("")
     setStatusFilter(null)
     setDateFilter(null)
+    router.get("/attendance", {}, { preserveScroll: true })
   }
 
   const refreshData = () => {
@@ -760,7 +802,6 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
       preserveScroll: true, // Add this to prevent scrolling to top
       onSuccess: () => {
         setIsRefreshing(false)
-        toast.success("Data refreshed successfully")
       },
       onError: () => {
         setIsRefreshing(false)
@@ -769,7 +810,7 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
     })
   }
 
-  // Update the calculateSummary function to filter by date
+  // Update the calculateSummary function to include all status types
   const calculateSummary = () => {
     // Filter attendance records by the selected date if a date is selected
     const filteredByDate = summaryDateFilter
@@ -797,9 +838,11 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
       presentCount: filteredByDate.filter((a) => a.status === "Present").length,
       absentCount: filteredByDate.filter((a) => a.status === "Absent").length,
       dayOffCount: filteredByDate.filter((a) => a.status === "Day Off").length,
-      holidayCount: filteredByDate.filter((a) => a.status === "Holiday").length,
       halfDayCount: filteredByDate.filter((a) => a.status === "Half Day").length,
+      wfhCount: filteredByDate.filter((a) => a.status === "WFH").length,
       leaveCount: filteredByDate.filter((a) => a.status === "Leave").length,
+      holidayCount: filteredByDate.filter((a) => a.status === "Holiday").length,
+      spCount: filteredByDate.filter((a) => a.status === "SP").length,
       totalDailyRate: totalDailyRate,
       totalAdjustments: totalAdjustments,
       totalPayAmount: totalPayAmount,
@@ -847,16 +890,20 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
     const startOfWeek = new Date(today)
     const day = startOfWeek.getDay()
     const diff = startOfWeek.getDate() - day + (day === 0 ? -6 : 1)
-    startOfWeek.setDate(diff)
-    startOfWeek.setHours(0, 0, 0, 0)
+    // Calculate the start of the current week (Monday)
+    const newStartOfWeek = new Date(today)
+    const newDay = newStartOfWeek.getDay()
+    const newDiff = newStartOfWeek.getDate() - newDay + (newDay === 0 ? -6 : 1)
+    newStartOfWeek.setDate(newDiff)
+    newStartOfWeek.setHours(0, 0, 0, 0)
 
     // Calculate the end of the week (Sunday)
-    const endOfWeek = new Date(startOfWeek)
-    endOfWeek.setDate(startOfWeek.getDate() + 6)
+    const endOfWeek = new Date(newStartOfWeek)
+    endOfWeek.setDate(newStartOfWeek.getDate() + 6)
 
     // Count days with attendance records
     let daysWithRecords = 0
-    const currentDay = new Date(startOfWeek)
+    const currentDay = new Date(newStartOfWeek)
 
     while (currentDay <= endOfWeek) {
       const dateString = currentDay.toISOString().split("T")[0]
@@ -1125,70 +1172,171 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
 
         {/* Summary Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-          <Card className="p-4 border border-slate-200 dark:border-slate-700 hover:shadow-md transition-all duration-200">
+          {/* Present */}
+          <Card className="p-4 border border-slate-200 dark:border-slate-700 hover:shadow-md transition-all duration-200 group">
             <div className="flex justify-between items-start">
               <div>
                 <p className="text-sm text-slate-500 dark:text-slate-400">Present</p>
-                <p className="text-2xl font-bold mt-1">{attendanceSummary.presentCount}</p>
-                <p className="text-xs text-green-500 mt-1">
+                <p className="text-2xl font-bold mt-1 text-black dark:text-white transition-colors group-hover:text-green-600 dark:group-hover:text-green-500">
+                  {attendanceSummary.presentCount}
+                </p>
+                <p className="text-xs text-green-500 mt-1 transition-colors group-hover:text-green-600 dark:group-hover:text-green-400">
                   {attendanceSummary.totalRecords > 0
                     ? Math.round((attendanceSummary.presentCount / attendanceSummary.totalRecords) * 100)
                     : 0}
                   % of total
                 </p>
               </div>
-              <div className="p-2 rounded-full bg-green-100 dark:bg-green-900/20 text-green-500">
+              <div
+                className="p-2 rounded-full bg-green-50 text-green-500 dark:bg-green-900/20 dark:text-green-400 dark:border-green-800 
+                  group-hover:bg-green-100 dark:group-hover:bg-green-800/30 transition-colors"
+              >
                 <Calendar className="h-5 w-5" />
               </div>
             </div>
           </Card>
-          <Card className="p-4 border border-slate-200 dark:border-slate-700 hover:shadow-md transition-all duration-200">
+
+          {/* Absent */}
+          <Card className="p-4 border border-slate-200 dark:border-slate-700 hover:shadow-md transition-all duration-200 group">
             <div className="flex justify-between items-start">
               <div>
                 <p className="text-sm text-slate-500 dark:text-slate-400">Absent</p>
-                <p className="text-2xl font-bold mt-1">{attendanceSummary.absentCount}</p>
-                <p className="text-xs text-red-500 mt-1">
+                <p className="text-2xl font-bold mt-1 group-hover:text-red-600 dark:group-hover:text-red-500">
+                  {attendanceSummary.absentCount}
+                </p>
+                <p className="text-xs text-red-500 mt-1 transition-colors group-hover:text-red-600 dark:group-hover:text-red-400">
                   {attendanceSummary.totalRecords > 0
                     ? Math.round((attendanceSummary.absentCount / attendanceSummary.totalRecords) * 100)
                     : 0}
                   % of total
                 </p>
               </div>
-              <div className="p-2 rounded-full bg-red-100 dark:bg-red-900/20 text-red-500">
+              <div className="p-2 rounded-full bg-red-100 dark:bg-red-900/20 text-red-500 group-hover:bg-red-200 dark:group-hover:bg-red-800/30 transition-colors">
                 <Calendar className="h-5 w-5" />
               </div>
             </div>
           </Card>
-          <Card className="p-4 border border-slate-200 dark:border-slate-700 hover:shadow-md transition-all duration-200">
+
+          {/* Day Off */}
+          <Card className="p-4 border border-slate-200 dark:border-slate-700 hover:shadow-md transition-all duration-200 group">
             <div className="flex justify-between items-start">
               <div>
                 <p className="text-sm text-slate-500 dark:text-slate-400">Day Off</p>
-                <p className="text-2xl font-bold mt-1">{attendanceSummary.dayOffCount}</p>
-                <p className="text-xs text-blue-500 mt-1">
+                <p className="text-2xl font-bold mt-1 group-hover:text-blue-600 dark:group-hover:text-blue-500">
+                  {attendanceSummary.dayOffCount}
+                </p>
+                <p className="text-xs text-blue-500 mt-1 transition-colors group-hover:text-blue-600 dark:group-hover:text-blue-400">
                   {attendanceSummary.totalRecords > 0
                     ? Math.round((attendanceSummary.dayOffCount / attendanceSummary.totalRecords) * 100)
                     : 0}
                   % of total
                 </p>
               </div>
-              <div className="p-2 rounded-full bg-blue-100 dark:bg-blue-900/20 text-blue-500">
+              <div className="p-2 rounded-full bg-blue-100 dark:bg-blue-900/20 text-blue-500 group-hover:bg-blue-200 dark:group-hover:bg-blue-800/30 transition-colors">
                 <Calendar className="h-5 w-5" />
               </div>
             </div>
           </Card>
-          <Card className="p-4 border border-slate-200 dark:border-slate-700 hover:shadow-md transition-all duration-200">
+
+          {/* Half Day */}
+          <Card className="p-4 border border-slate-200 dark:border-slate-700 hover:shadow-md transition-all duration-200 group">
+            <div className="flex justify-between items-start">
+              <div>
+                <p className="text-sm text-slate-500 dark:text-slate-400">Half Day</p>
+                <p className="text-2xl font-bold mt-1 group-hover:text-orange-600 dark:group-hover:text-orange-500">
+                  {attendanceSummary.halfDayCount}
+                </p>
+                <p className="text-xs text-orange-500 mt-1 transition-colors group-hover:text-orange-600 dark:group-hover:text-orange-400">
+                  {attendanceSummary.totalRecords > 0
+                    ? Math.round((attendanceSummary.halfDayCount / attendanceSummary.totalRecords) * 100)
+                    : 0}
+                  % of total
+                </p>
+              </div>
+              <div className="p-2 rounded-full bg-orange-100 dark:bg-orange-900/20 text-orange-500 group-hover:bg-orange-200 dark:group-hover:bg-orange-800/30 transition-colors">
+                <Calendar className="h-5 w-5" />
+              </div>
+            </div>
+          </Card>
+
+          {/* Work From Home (WFH) */}
+          <Card className="p-4 border border-slate-200 dark:border-slate-700 hover:shadow-md transition-all duration-200 group">
+            <div className="flex justify-between items-start">
+              <div>
+                <p className="text-sm text-slate-500 dark:text-slate-400">Work From Home</p>
+                <p className="text-2xl font-bold mt-1 group-hover:text-indigo-600 dark:group-hover:text-indigo-500">
+                  {attendanceSummary.wfhCount}
+                </p>
+                <p className="text-xs text-indigo-500 mt-1 transition-colors group-hover:text-indigo-600 dark:group-hover:text-indigo-400">
+                  {attendanceSummary.totalRecords > 0
+                    ? Math.round((attendanceSummary.wfhCount / attendanceSummary.totalRecords) * 100)
+                    : 0}
+                  % of total
+                </p>
+              </div>
+              <div className="p-2 rounded-full bg-indigo-100 dark:bg-indigo-900/20 text-indigo-500 group-hover:bg-indigo-200 dark:group-hover:bg-indigo-800/30 transition-colors">
+                <Calendar className="h-5 w-5" />
+              </div>
+            </div>
+          </Card>
+          {/* Holiday */}
+          <Card className="p-4 border border-slate-200 dark:border-slate-700 hover:shadow-md transition-all duration-200 group">
             <div className="flex justify-between items-start">
               <div>
                 <p className="text-sm text-slate-500 dark:text-slate-400">Holiday</p>
-                <p className="text-2xl font-bold mt-1">{attendanceSummary.holidayCount}</p>
-                <p className="text-xs text-purple-500 mt-1">
+                <p className="text-2xl font-bold mt-1 group-hover:text-purple-600 dark:group-hover:text-purple-500">
+                  {attendanceSummary.holidayCount}
+                </p>
+                <p className="text-xs text-purple-500 mt-1 transition-colors group-hover:text-purple-600 dark:group-hover:text-purple-400">
                   {attendanceSummary.totalRecords > 0
                     ? Math.round((attendanceSummary.holidayCount / attendanceSummary.totalRecords) * 100)
                     : 0}
                   % of total
                 </p>
               </div>
-              <div className="p-2 rounded-full bg-purple-100 dark:bg-purple-900/20 text-purple-500">
+              <div className="p-2 rounded-full bg-purple-100 dark:bg-purple-900/20 text-purple-500 group-hover:bg-purple-200 dark:group-hover:bg-purple-800/30 transition-colors">
+                <Calendar className="h-5 w-5" />
+              </div>
+            </div>
+          </Card>
+
+          {/* Leave */}
+          <Card className="p-4 border border-slate-200 dark:border-slate-700 hover:shadow-md transition-all duration-200 group">
+            <div className="flex justify-between items-start">
+              <div>
+                <p className="text-sm text-slate-500 dark:text-slate-400">Leave</p>
+                <p className="text-2xl font-bold mt-1 group-hover:text-cyan-600 dark:group-hover:text-cyan-500">
+                  {attendanceSummary.leaveCount}
+                </p>
+                <p className="text-xs text-cyan-500 mt-1 transition-colors group-hover:text-cyan-600 dark:group-hover:text-cyan-400">
+                  {attendanceSummary.totalRecords > 0
+                    ? Math.round((attendanceSummary.leaveCount / attendanceSummary.totalRecords) * 100)
+                    : 0}
+                  % of total
+                </p>
+              </div>
+              <div className="p-2 rounded-full bg-cyan-100 dark:bg-cyan-900/20 text-cyan-500 group-hover:bg-cyan-200 dark:group-hover:bg-cyan-800/30 transition-colors">
+                <Calendar className="h-5 w-5" />
+              </div>
+            </div>
+          </Card>
+
+          {/* Special Project (SP) */}
+          <Card className="p-4 border border-slate-200 dark:border-slate-700 hover:shadow-md transition-all duration-200 group">
+            <div className="flex justify-between items-start">
+              <div>
+                <p className="text-sm text-slate-500 dark:text-slate-400">Special Project</p>
+                <p className="text-2xl font-bold mt-1 group-hover:text-pink-600 dark:group-hover:text-pink-500">
+                  {attendanceSummary.spCount}
+                </p>
+                <p className="text-xs text-pink-500 mt-1 transition-colors group-hover:text-pink-600 dark:group-hover:text-pink-400">
+                  {attendanceSummary.totalRecords > 0
+                    ? Math.round((attendanceSummary.spCount / attendanceSummary.totalRecords) * 100)
+                    : 0}
+                  % of total
+                </p>
+              </div>
+              <div className="p-2 rounded-full bg-pink-100 dark:bg-pink-900/20 text-pink-500 group-hover:bg-pink-200 dark:group-hover:bg-pink-800/30 transition-colors">
                 <Calendar className="h-5 w-5" />
               </div>
             </div>
@@ -1205,14 +1353,14 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
                 placeholder="Search by employee name or number..."
                 className="pl-10 p-2 w-full border rounded bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400"
                 value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+                onChange={handleSearch}
               />
             </div>
             <div className="flex flex-wrap gap-2">
               <select
                 className="p-2 border rounded bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400"
                 value={statusFilter ?? ""}
-                onChange={(e) => setStatusFilter(e.target.value || null)}
+                onChange={(e) => handleStatusFilter(e.target.value)}
               >
                 <option value="">Status</option>
                 <option value="Present">Present</option>
@@ -1226,7 +1374,7 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
                 type="date"
                 className="p-2 border rounded bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400"
                 value={dateFilter ?? ""}
-                onChange={(e) => setDateFilter(e.target.value || null)}
+                onChange={(e) => handleDateFilter(e.target.value)}
               />
               <Button
                 variant="outline"
@@ -1241,60 +1389,147 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
         </Card>
 
         {/* Drag and Drop Status Zones */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-8 gap-4 mb-6">
+          {/* Present */}
           <div
-            className={`p-4 rounded-lg border-2 border-dashed ${isDragging ? "border-green-500 bg-green-50 dark:bg-green-900/10" : "border-slate-200 dark:border-slate-700"}`}
+            className={`p-4 rounded-lg border-2 border-dashed ${
+              isDragging
+                ? "border-green-500 bg-green-50 dark:bg-green-900/20"
+                : "border-slate-200 dark:border-slate-700"
+            }`}
             onDragOver={handleDragOver}
             onDrop={(e) => handleDrop(e, "Present")}
           >
             <div className="flex items-center mb-2">
               <div className="w-3 h-3 rounded-full bg-green-500 mr-2"></div>
-              <h3 className="font-medium">Present</h3>
+              <h3 className="font-medium text-green-600 dark:text-green-400">Present</h3>
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400">
               Drag and drop attendance records here to mark as Present
             </p>
           </div>
 
+          {/* Absent */}
           <div
-            className={`p-4 rounded-lg border-2 border-dashed ${isDragging ? "border-red-500 bg-red-50 dark:bg-red-900/10" : "border-slate-200 dark:border-slate-700"}`}
+            className={`p-4 rounded-lg border-2 border-dashed ${
+              isDragging ? "border-red-500 bg-red-50 dark:bg-red-900/20" : "border-slate-200 dark:border-slate-700"
+            }`}
             onDragOver={handleDragOver}
             onDrop={(e) => handleDrop(e, "Absent")}
           >
             <div className="flex items-center mb-2">
               <div className="w-3 h-3 rounded-full bg-red-500 mr-2"></div>
-              <h3 className="font-medium">Absent</h3>
+              <h3 className="font-medium text-red-600 dark:text-red-400">Absent</h3>
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400">
               Drag and drop attendance records here to mark as Absent
             </p>
           </div>
 
+          {/* Day Off */}
           <div
-            className={`p-4 rounded-lg border-2 border-dashed ${isDragging ? "border-blue-500 bg-blue-50 dark:bg-blue-900/10" : "border-slate-200 dark:border-slate-700"}`}
+            className={`p-4 rounded-lg border-2 border-dashed ${
+              isDragging ? "border-sky-500 bg-sky-50 dark:bg-sky-900/20" : "border-slate-200 dark:border-slate-700"
+            }`}
             onDragOver={handleDragOver}
             onDrop={(e) => handleDrop(e, "Day Off")}
           >
             <div className="flex items-center mb-2">
-              <div className="w-3 h-3 rounded-full bg-blue-500 mr-2"></div>
-              <h3 className="font-medium">Day Off</h3>
+              <div className="w-3 h-3 rounded-full bg-sky-500 mr-2"></div>
+              <h3 className="font-medium text-sky-600 dark:text-sky-400">Day Off</h3>
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400">
               Drag and drop attendance records here to mark as Day Off
             </p>
           </div>
 
+          {/* Half Day */}
           <div
-            className={`p-4 rounded-lg border-2 border-dashed ${isDragging ? "border-amber-500 bg-amber-50 dark:bg-amber-900/10" : "border-slate-200 dark:border-slate-700"}`}
+            className={`p-4 rounded-lg border-2 border-dashed ${
+              isDragging
+                ? "border-orange-500 bg-orange-50 dark:bg-orange-900/20"
+                : "border-slate-200 dark:border-slate-700"
+            }`}
             onDragOver={handleDragOver}
             onDrop={(e) => handleDrop(e, "Half Day")}
           >
             <div className="flex items-center mb-2">
-              <div className="w-3 h-3 rounded-full bg-amber-500 mr-2"></div>
-              <h3 className="font-medium">Half Day</h3>
+              <div className="w-3 h-3 rounded-full bg-orange-500 mr-2"></div>
+              <h3 className="font-medium text-orange-600 dark:text-orange-400">Half Day</h3>
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400">
               Drag and drop attendance records here to mark as Half Day
+            </p>
+          </div>
+
+          {/* Holiday */}
+          <div
+            className={`p-4 rounded-lg border-2 border-dashed ${
+              isDragging
+                ? "border-violet-500 bg-violet-50 dark:bg-violet-900/20"
+                : "border-slate-200 dark:border-slate-700"
+            }`}
+            onDragOver={handleDragOver}
+            onDrop={(e) => handleDrop(e, "Holiday")}
+          >
+            <div className="flex items-center mb-2">
+              <div className="w-3 h-3 rounded-full bg-violet-500 mr-2"></div>
+              <h3 className="font-medium text-violet-600 dark:text-violet-400">Holiday</h3>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Drag and drop attendance records here to mark as Holiday
+            </p>
+          </div>
+
+          {/* Vacation Leave */}
+          <div
+            className={`p-4 rounded-lg border-2 border-dashed ${
+              isDragging ? "border-cyan-500 bg-cyan-50 dark:bg-cyan-900/20" : "border-slate-200 dark:border-slate-700"
+            }`}
+            onDragOver={handleDragOver}
+            onDrop={(e) => handleDrop(e, "Leave")}
+          >
+            <div className="flex items-center mb-2">
+              <div className="w-3 h-3 rounded-full bg-cyan-500 mr-2"></div>
+              <h3 className="font-medium text-cyan-600 dark:text-cyan-400">Leave</h3>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Drag and drop attendance records here to mark as Leave
+            </p>
+          </div>
+
+          {/* Work From Home */}
+          <div
+            className={`p-4 rounded-lg border-2 border-dashed ${
+              isDragging
+                ? "border-yellow-500 bg-yellow-50 dark:bg-yellow-900/20"
+                : "border-slate-200 dark:border-slate-700"
+            }`}
+            onDragOver={handleDragOver}
+            onDrop={(e) => handleDrop(e, "WFH")}
+          >
+            <div className="flex items-center mb-2">
+              <div className="w-3 h-3 rounded-full bg-yellow-500 mr-2"></div>
+              <h3 className="font-medium text-yellow-600 dark:text-yellow-400">WFH</h3>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Drag and drop attendance records here to mark as Work From Home
+            </p>
+          </div>
+          {/* Special Project */}
+          <div
+            className={`p-4 rounded-lg border-2 border-dashed ${
+              isDragging ? "border-pink-500 bg-pink-50 dark:bg-pink-900/20" : "border-slate-200 dark:border-slate-700"
+            }`}
+            onDragOver={handleDragOver}
+            onDrop={(e) => handleDrop(e, "SP")}
+          >
+            <div className="flex items-center mb-2">
+              <div className="w-3 h-3 rounded-full bg-pink-500 mr-2"></div>
+              <h3 className="font-medium text-pink-600 dark:text-pink-400">SP</h3>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Drag and drop attendance records here to mark as Special Project
             </p>
           </div>
         </div>
@@ -1382,8 +1617,8 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
                       </tr>
                     </thead>
                     <tbody>
-                      {paginatedAttendances.length > 0 ? (
-                        paginatedAttendances.map((attendance) => {
+                      {attendances.data.length > 0 ? (
+                        attendances.data.map((attendance) => {
                           const payAmount = calculatePayAmount(attendance)
 
                           return (
@@ -1471,73 +1706,23 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
                 {filteredAttendances.length > 0 && (
                   <div className="flex items-center justify-between">
                     <div className="text-sm text-slate-500 dark:text-slate-400">
-                      Showing {(currentPage - 1) * itemsPerPage + 1} to{" "}
-                      {Math.min(currentPage * itemsPerPage, filteredAttendances.length)} of {filteredAttendances.length}{" "}
-                      entries
+                      Showing {attendances.from || 0} to {attendances.to || 0} of {attendances.total} entries
                     </div>
                     <div className="flex items-center space-x-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
-                        disabled={currentPage === 1}
-                      >
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          className="h-4 w-4"
-                        >
-                          <path d="M15 18l-6-6 6-6" />
-                        </svg>
-                      </Button>
-                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                        // Show pages around current page
-                        let pageNum = currentPage
-                        if (totalPages <= 5) {
-                          pageNum = i + 1
-                        } else if (currentPage <= 3) {
-                          pageNum = i + 1
-                        } else if (currentPage >= totalPages - 2) {
-                          pageNum = totalPages - 4 + i
-                        } else {
-                          pageNum = currentPage - 2 + i
-                        }
-
-                        return (
-                          <Button
-                            key={pageNum}
-                            variant={currentPage === pageNum ? "default" : "outline"}
-                            size="sm"
-                            onClick={() => setCurrentPage(pageNum)}
-                          >
-                            {pageNum}
-                          </Button>
-                        )
-                      })}
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
-                        disabled={currentPage === totalPages}
-                      >
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          className="h-4 w-4"
-                        >
-                          <path d="M9 18l6-6-6-6" />
-                        </svg>
-                      </Button>
+                      {attendances.links.map((link, i) => (
+                        <Button
+                          key={i}
+                          variant={link.active ? "default" : "outline"}
+                          size="sm"
+                          onClick={() => {
+                            if (link.url) {
+                              router.get(link.url, {}, { preserveScroll: true })
+                            }
+                          }}
+                          disabled={!link.url}
+                          dangerouslySetInnerHTML={{ __html: link.label }}
+                        />
+                      ))}
                     </div>
                   </div>
                 )}
@@ -2267,6 +2452,7 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
         )}
 
         {/* Generate Payroll Dialog */}
+
         <Dialog open={showGeneratePayrollDialog} onOpenChange={setShowGeneratePayrollDialog}>
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
@@ -2290,6 +2476,7 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
                   <option value="">Select a period</option>
                   {payrollPeriods.map((period) => (
                     <option key={period.id} value={period.id}>
+                      {period.week_id && `Week ID: ${period.week_id} - `}
                       {new Date(period.period_start).toLocaleDateString()} -{" "}
                       {new Date(period.period_end).toLocaleDateString()}
                     </option>
@@ -2306,6 +2493,15 @@ const AttendanceIndex = ({ attendances = [], employees = [], payrollPeriods = []
                   Overwrite existing payroll records for this period
                 </label>
               </div>
+
+              <Alert variant="info" className="mt-2">
+                <AlertCircle className="h-4 w-4" />
+                <AlertTitle>Important</AlertTitle>
+                <AlertDescription>
+                  This will generate payroll entries based on the attendance records for the selected period. Daily
+                  rates and statuses from attendance records will be respected when calculating pay.
+                </AlertDescription>
+              </Alert>
             </div>
 
             <DialogFooter>

@@ -10,12 +10,72 @@ use Illuminate\Support\Facades\Log;
 
 class EmployeeController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
-        $employees = Employee::all();
+        // Get pagination parameters
+        $perPage = $request->input('perPage', 10);
+        $page = $request->input('page', 1);
+        $search = $request->input('search', '');
+        $position = $request->input('position', '');
+        $department = $request->input('department', '');
+        $status = $request->input('status', '');
+        $sort = $request->input('sort', 'employee_number');
+        $direction = $request->input('direction', 'asc');
+        
+        // Start building the query
+        $query = Employee::query();
+        
+        // Apply search if provided
+        if (!empty($search)) {
+            $query->where(function($q) use ($search) {
+                $q->where('full_name', 'like', "%{$search}%")
+                  ->orWhere('employee_number', 'like', "%{$search}%");
+            });
+        }
+        
+        // Apply filters if provided
+        if (!empty($position)) {
+            $query->where('position', 'like', "%{$position}%");
+        }
+        
+        if (!empty($department)) {
+            $query->where('department', 'like', "%{$department}%");
+        }
+        
+        if (!empty($status)) {
+            $query->where('employment_status', 'like', "%{$status}%");
+        }
+        
+        // Apply sorting
+        $query->orderBy($sort, $direction);
+        
+        // Get paginated results
+        $employees = $query->paginate($perPage);
+        
+        // Calculate statistics from ALL employees, not just the filtered ones
+        $allEmployees = Employee::all();
+        $stats = [
+            'totalEmployees' => $allEmployees->count(),
+            'regularCount' => $allEmployees->where('employment_status', 'Regular')->count(),
+            'probationaryCount' => $allEmployees->where('employment_status', 'Probationary')->count(),
+            'departmentCount' => $allEmployees->pluck('department')->unique()->count(),
+            'maleCount' => $allEmployees->where('gender', 'Male')->count(),
+            'femaleCount' => $allEmployees->where('gender', 'Female')->count(),
+            'averageAge' => $allEmployees->avg('age'),
+            'averageYearsOfService' => $allEmployees->avg('years_of_service'),
+            'totalDailyRate' => $allEmployees->sum('daily_rate')
+        ];
+        
+        // Get unique departments and positions for filters
+        $departments = $allEmployees->pluck('department')->unique()->values()->all();
+        $positions = $allEmployees->pluck('position')->unique()->values()->all();
         
         return Inertia::render('Employees/Index', [
-            'employees' => $employees
+            'employees' => $employees,
+            'stats' => $stats,
+            'departments' => $departments,
+            'positions' => $positions,
+            'filters' => $request->only(['search', 'position', 'department', 'status'])
         ]);
     }
 
@@ -196,6 +256,5 @@ class EmployeeController extends Controller
     
         return redirect()->route('employees.index')->with('success', 'Employees imported successfully.');
     }
-    
 }
 

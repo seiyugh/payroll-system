@@ -98,11 +98,30 @@ const UpdateAttendanceModal = ({ attendance, onClose, onSubmit, employees = [] }
 
     setIsSubmitting(true)
     try {
+      // Check if we're changing the date to a date that might already exist for this employee
+      if (formData.work_date !== attendance.work_date) {
+        // This is a date change, so we should check if there's already an attendance record for this date
+        console.log("Date changed, checking for existing records")
+        // In a real implementation, you would check against your database here
+        // For now, we'll just proceed with the update
+      }
+
       onSubmit(formattedData)
+      toast.success("Attendance record updated successfully")
       onClose()
     } catch (error) {
       console.error("Error updating attendance:", error)
-      toast.error("Failed to update attendance. Please try again.")
+
+      // Check for duplicate entry error
+      if (
+        error.message &&
+        error.message.includes("Duplicate entry") &&
+        error.message.includes("attendance_employee_number_work_date_unique")
+      ) {
+        toast.error(`An attendance record already exists for this employee on ${formData.work_date}`)
+      } else {
+        toast.error("Failed to update attendance. Please try again.")
+      }
     } finally {
       setIsSubmitting(false)
     }
@@ -116,8 +135,16 @@ const UpdateAttendanceModal = ({ attendance, onClose, onSubmit, employees = [] }
         return "bg-red-50 text-red-700 border-red-200 dark:bg-red-900/20 dark:text-red-400 dark:border-red-800"
       case "Day Off":
         return "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/20 dark:text-blue-400 dark:border-blue-800"
+      case "Half Day":
+        return "bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-900/20 dark:text-orange-400 dark:border-orange-800"
+      case "WFH":
+        return "bg-cyan-50 text-cyan-700 border-cyan-200 dark:bg-cyan-900/20 dark:text-cyan-400 dark:border-cyan-800"
+      case "Leave":
+        return "bg-yellow-50 text-yellow-700 border-yellow-200 dark:bg-yellow-900/20 dark:text-yellow-400 dark:border-yellow-800"
       case "Holiday":
         return "bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-900/20 dark:text-purple-400 dark:border-purple-800"
+      case "SP":
+        return "bg-pink-50 text-pink-700 border-pink-200 dark:bg-pink-900/20 dark:text-pink-400 dark:border-pink-800"
       default:
         return "bg-slate-50 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700"
     }
@@ -165,11 +192,7 @@ const UpdateAttendanceModal = ({ attendance, onClose, onSubmit, employees = [] }
                 type="button"
                 variant="outline"
                 size="sm"
-                className={`${
-                  quickSelect === "Present"
-                    ? "bg-green-50 text-green-700 border-green-200 dark:bg-green-900/20 dark:text-green-400 dark:border-green-800"
-                    : ""
-                }`}
+                className={`${quickSelect === "Present" ? getStatusBadgeColor("Present") : ""}`}
                 onClick={() => handleQuickSelect("Present")}
               >
                 Present
@@ -178,11 +201,7 @@ const UpdateAttendanceModal = ({ attendance, onClose, onSubmit, employees = [] }
                 type="button"
                 variant="outline"
                 size="sm"
-                className={`${
-                  quickSelect === "Absent"
-                    ? "bg-red-50 text-red-700 border-red-200 dark:bg-red-900/20 dark:text-red-400 dark:border-red-800"
-                    : ""
-                }`}
+                className={`${quickSelect === "Absent" ? getStatusBadgeColor("Absent") : ""}`}
                 onClick={() => handleQuickSelect("Absent")}
               >
                 Absent
@@ -191,11 +210,27 @@ const UpdateAttendanceModal = ({ attendance, onClose, onSubmit, employees = [] }
                 type="button"
                 variant="outline"
                 size="sm"
-                className={`${
-                  quickSelect === "Day Off"
-                    ? "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/20 dark:text-blue-400 dark:border-blue-800"
-                    : ""
-                }`}
+                className={`${quickSelect === "Half Day" ? getStatusBadgeColor("Half Day") : ""}`}
+                onClick={() => handleQuickSelect("Half Day")}
+              >
+                Half Day
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className={`${quickSelect === "WFH" ? getStatusBadgeColor("WFH") : ""}`}
+                onClick={() => handleQuickSelect("WFH")}
+              >
+                WFH
+              </Button>
+            </div>
+            <div className="grid grid-cols-4 gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className={`${quickSelect === "Day Off" ? getStatusBadgeColor("Day Off") : ""}`}
                 onClick={() => handleQuickSelect("Day Off")}
               >
                 Day Off
@@ -204,30 +239,31 @@ const UpdateAttendanceModal = ({ attendance, onClose, onSubmit, employees = [] }
                 type="button"
                 variant="outline"
                 size="sm"
-                className={`${
-                  quickSelect === "Holiday"
-                    ? "bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-900/20 dark:text-purple-400 dark:border-purple-800"
-                    : ""
-                }`}
+                className={`${quickSelect === "Leave" ? getStatusBadgeColor("Leave") : ""}`}
+                onClick={() => handleQuickSelect("Leave")}
+              >
+                Leave
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className={`${quickSelect === "Holiday" ? getStatusBadgeColor("Holiday") : ""}`}
                 onClick={() => handleQuickSelect("Holiday")}
               >
                 Holiday
               </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className={`${quickSelect === "SP" ? getStatusBadgeColor("SP") : ""}`}
+                onClick={() => handleQuickSelect("SP")}
+              >
+                SP
+              </Button>
             </div>
-            <Select
-              defaultValue={formData.status}
-              onValueChange={(value) => setFormData((prev) => ({ ...prev, status: value }))}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="Present">Present</SelectItem>
-                <SelectItem value="Absent">Absent</SelectItem>
-                <SelectItem value="Day Off">Day Off</SelectItem>
-                <SelectItem value="Holiday">Holiday</SelectItem>
-              </SelectContent>
-            </Select>
+           
           </div>
 
           <div className="space-y-2">

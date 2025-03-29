@@ -2,69 +2,85 @@
 
 namespace Database\Factories;
 
-use App\Models\PayrollEntry;
+use Illuminate\Database\Eloquent\Factories\Factory;
 use App\Models\Employee;
 use App\Models\PayrollPeriod;
-use Illuminate\Database\Eloquent\Factories\Factory;
+use Carbon\Carbon;
 
 class PayrollEntryFactory extends Factory
 {
-    protected $model = PayrollEntry::class;
-
     public function definition()
     {
-        // Select an existing employee or create one if none exist
+        // Ensure we have required records
         $employee = Employee::inRandomOrder()->first() ?? Employee::factory()->create();
+        $payrollPeriod = PayrollPeriod::inRandomOrder()->first() ?? PayrollPeriod::factory()->create();
 
-        // Assign a daily rate (realistic values)
-        $daily_rate = $this->faker->randomElement([600, 650, 450, 500, 550]);
-
-        // Assume a 7-day payroll period
-        $work_days = 7;
-        $gross_pay = $daily_rate * $work_days;
-
-        // Calculate deductions as percentages of gross pay
-        $sss = round($gross_pay * 0.045, 2);  // 4.5% for SSS
-        $philhealth = round($gross_pay * 0.03, 2);  // 3% for PhilHealth
-        $pagibig = round($gross_pay * 0.02, 2);  // 2% for Pag-IBIG
-        $tax = round($gross_pay * 0.12, 2);  // 12% tax
-        $cash_advance = $this->faker->randomFloat(2, 0, 500);
-        $loan = $this->faker->randomFloat(2, 0, 500);
-        $vat = round($gross_pay * 0.05, 2);  // 5% VAT
-        $other_deductions = $this->faker->randomFloat(2, 0, 300);
-
-        // Total deductions
-        $total_deductions = $sss + $philhealth + $pagibig + $tax + $cash_advance + $loan + $vat + $other_deductions;
-
-        // Net pay calculation
-        $net_pay = $gross_pay - $total_deductions;
-
-        // YTD earnings: Assuming 3 months of work
-        $ytd_earnings = $gross_pay * 12;
-
-        // Thirteenth-month pay (basic calculation: total earnings / 12)
-        $thirteenth_month_pay = round($ytd_earnings / 12, 2);
+        // Calculations
+        $workDays = $this->calculateWorkDays($payrollPeriod->period_start, $payrollPeriod->period_end);
+        $grossPay = ($employee->daily_rate ?? 500) * $workDays;
+        
+        // Deductions (Philippines specific)
+        $sss = min(1350, max(400, $grossPay * 0.045));
+        $philhealth = round($grossPay * 0.04, 2);
+        $pagibig = $grossPay >= 5000 ? 100 : round($grossPay * 0.02, 2);
+        $tax = $this->calculateTax($grossPay - ($sss + $philhealth + $pagibig));
+        
+        // Other random deductions
+        $cashAdvance = rand(0, min(1000, $grossPay * 0.2));
+        $loan = rand(0, min(1000, $grossPay * 0.2));
+        $otherDeductions = rand(0, 300);
+        $vat = rand(0, 100);
+        $short = rand(0, 100); // Random short amount (not included in deductions)
+        
+        // Totals
+        $totalDeductions = $sss + $philhealth + $pagibig + $tax + $cashAdvance + $loan + $vat + $otherDeductions;
+        $netPay = $grossPay - $totalDeductions;
 
         return [
             'employee_number' => $employee->employee_number,
-            'payroll_period_id' => PayrollPeriod::factory(),
-            'gross_pay' => $gross_pay,
-            'sss_deduction' => $sss,
-            'philhealth_deduction' => $philhealth,
-            'pagibig_deduction' => $pagibig,
-            'tax_deduction' => $tax,
-            'cash_advance' => $cash_advance,
-            'loan' => $loan,
-            'vat' => $vat,
-            'other_deductions' => $other_deductions,
-            'total_deductions' => $total_deductions,
-            'net_pay' => $net_pay,
-            'ytd_earnings' => $ytd_earnings,
-            'thirteenth_month_pay' => $thirteenth_month_pay,
-            'status' => $this->faker->randomElement(['active', 'inactive']),
-            'daily_rates' => $daily_rate,
-            'created_at' => now(),
-            'updated_at' => now(),
+            'week_id' => $payrollPeriod->week_id,
+            
+            // Payroll details
+            'daily_rate' => $employee->daily_rate ?? 500,
+            'gross_pay' => round($grossPay, 2),
+            'sss_deduction' => round($sss, 2),
+            'philhealth_deduction' => round($philhealth, 2),
+            'pagibig_deduction' => round($pagibig, 2),
+            'tax_deduction' => round($tax, 2),
+            'cash_advance' => round($cashAdvance, 2),
+            'loan' => round($loan, 2),
+            'vat' => round($vat, 2),
+            'other_deductions' => round($otherDeductions, 2),
+            'short' => round($short, 2),
+            // Remove this line: 'net_pay' => round($netPay, 2),
+            'ytd_earnings' => round($grossPay + rand(0, 50000), 2),
+            'thirteenth_month_pay' => round(($grossPay + rand(0, 50000)) / 12, 2),
+            'status' => $this->faker->randomElement(['Pending', 'Approved', 'Paid']),
         ];
+    }
+
+    private function calculateWorkDays($start, $end)
+    {
+        $days = 0;
+        $current = Carbon::parse($start);
+        $end = Carbon::parse($end);
+        
+        while ($current <= $end) {
+            if (!$current->isWeekend()) $days++;
+            $current->addDay();
+        }
+        
+        return $days;
+    }
+
+    private function calculateTax($income)
+    {
+        $income = max(0, $income);
+        if ($income <= 20833) return 0;
+        if ($income <= 33333) return ($income - 20833) * 0.20;
+        if ($income <= 66667) return 2500 + ($income - 33333) * 0.25;
+        if ($income <= 166667) return 10833 + ($income - 66667) * 0.30;
+        if ($income <= 666667) return 40833 + ($income - 166667) * 0.32;
+        return 200833 + ($income - 666667) * 0.35;
     }
 }
