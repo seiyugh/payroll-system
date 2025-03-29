@@ -13,7 +13,7 @@ return new class extends Migration {
             $table->date('work_date');
             $table->decimal('daily_rate', 10, 2);
             $table->decimal('adjustment', 10, 2)->default(0);
-            $table->enum('status', ['Present', 'Absent', 'Day Off', 'Holiday'])->default('Present');
+            $table->enum('status', ['Present', 'Absent', 'Day Off', 'Holiday', 'Leave', 'WFH', 'Half Day', 'SP'])->default('Present');
             $table->timestamps();
 
             // Constraints

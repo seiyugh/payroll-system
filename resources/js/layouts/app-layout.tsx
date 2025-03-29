@@ -11,6 +11,25 @@ export default function AppLayout({ children }) {
     document.documentElement.classList.toggle("dark", localStorage.getItem("theme") === "dark")
   }, [])
 
+  useEffect(() => {
+    const handleSessionExpired = (e) => {
+      // Check for 401 (Unauthorized) or 419 (CSRF token mismatch) status codes
+      if (e.detail?.response?.status === 401 || e.detail?.response?.status === 419) {
+        // Clear any auth-related local storage
+        localStorage.removeItem("sidebarState")
+
+        // Redirect to login with timeout parameter
+        window.location.href = "/login?timeout=true"
+      }
+    }
+
+    document.addEventListener("inertia:error", handleSessionExpired)
+
+    return () => {
+      document.removeEventListener("inertia:error", handleSessionExpired)
+    }
+  }, [])
+
   return (
     <div className="flex h-screen">
       {/* Pass isOpen and toggleSidebar props to Sidebar */}

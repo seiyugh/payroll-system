@@ -12,7 +12,7 @@ class PayrollEntry extends Model
 
     protected $fillable = [
         'employee_number',
-        'payroll_period_id',
+        'week_id', // Changed from payroll_period_id to week_id
         'gross_pay',
         'sss_deduction',
         'philhealth_deduction',
@@ -27,7 +27,8 @@ class PayrollEntry extends Model
         'ytd_earnings',
         'thirteenth_month_pay',
         'status',
-        'daily_rates',
+        'daily_rate', // Changed from daily_rates to match migration
+        'short',      // Add this field if it's used
     ];
 
     protected $casts = [
@@ -44,7 +45,8 @@ class PayrollEntry extends Model
         'net_pay' => 'decimal:2',
         'ytd_earnings' => 'decimal:2',
         'thirteenth_month_pay' => 'decimal:2',
-        'daily_rates' => 'decimal:2',
+        'daily_rate' => 'decimal:2', // Changed from daily_rates
+        'short' => 'decimal:2',
     ];
 
     /**
@@ -64,10 +66,11 @@ class PayrollEntry extends Model
 
     /**
      * Get the payroll period that owns the payroll entry.
+     * Updated to use week_id as the foreign key
      */
     public function payrollPeriod(): BelongsTo
     {
-        return $this->belongsTo(PayrollPeriod::class);
+        return $this->belongsTo(PayrollPeriod::class, 'week_id', 'week_id');
     }
 
     /**

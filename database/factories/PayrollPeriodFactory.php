@@ -3,7 +3,6 @@
 namespace Database\Factories;
 
 use App\Models\PayrollPeriod;
-use App\Models\Employee;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Carbon\Carbon;
 
@@ -13,51 +12,37 @@ class PayrollPeriodFactory extends Factory
 
     public function definition()
     {
-        $currentMonth = Carbon::now()->month;
-        $currentYear = Carbon::now()->year;
+        // Get the most recent payroll period
+        $lastPeriod = PayrollPeriod::latest('period_end')->first();
 
-        // Find the first Monday of the current month
-        $startDate = Carbon::create($currentYear, $currentMonth, 1);
-        while (!$startDate->isMonday()) {
-            $startDate->addDay();
+        if ($lastPeriod) {
+            // Start new period the day after the last period ended
+            $periodStart = Carbon::parse($lastPeriod->period_end)->addDay();
+        } else {
+            // Start from the first Monday of the current year if no existing records
+            $periodStart = Carbon::now()->startOfYear()->next(Carbon::MONDAY);
         }
 
-        // Select a payroll period start date that is always a Monday
-        $weeksToAdd = rand(0, 3); // Pick one of the first four weeks
-        $startDate->addWeeks($weeksToAdd);
-
-        // Ensure the selected period is still within the same month
-        if ($startDate->month !== $currentMonth) {
-            $startDate->subWeek(); // Prevent overflow into the next month
+        // Ensure period starts on Monday
+        if (!$periodStart->isMonday()) {
+            $periodStart = $periodStart->next(Carbon::MONDAY);
         }
 
-        // Set end date to always be the following Sunday (7-day period)
-        $endDate = (clone $startDate)->addDays(6);
+        // Payroll period runs from Monday to Sunday
+        $periodEnd = $periodStart->copy()->next(Carbon::SUNDAY);
 
-        // Ensure end date is still within the same month
-        if ($endDate->month !== $currentMonth) {
-            $endDate = (clone $startDate)->endOfMonth(); // Set to last day if needed
-        }
+        // Payment date is always the Thursday after the payroll period ends
+        $paymentDate = $periodEnd->copy()->addDays(4);
 
-        // Set payment date exactly 4 weekdays after period_end
-        $paymentDate = (clone $endDate);
-        $daysAdded = 0;
-        while ($daysAdded < 4) {
-            $paymentDate->addDay();
-            if (!$paymentDate->isWeekend()) {
-                $daysAdded++;
-            }
-        }
-
-        // Fetch an existing employee (or create one if none exist)
-        $employee = Employee::inRandomOrder()->first() ?? Employee::factory()->create();
+        // Compute the week_id (YEARWEEK format)
+        $weekId = $periodStart->format('oW'); // "o" gives ISO-8601 year, "W" gives the week number
 
         return [
-            'employee_number' => $employee->employee_number,
-            'period_start' => $startDate->format('Y-m-d'),
-            'period_end' => $endDate->format('Y-m-d'),
+            'period_start' => $periodStart->format('Y-m-d'),
+            'period_end' => $periodEnd->format('Y-m-d'),
+            'week_id' => $weekId,
             'payment_date' => $paymentDate->format('Y-m-d'),
-            'status' => $this->faker->randomElement(['open', 'closed']),
+            'status' => $paymentDate->isPast() ? 'closed' : 'open',
             'created_at' => now(),
             'updated_at' => now(),
         ];

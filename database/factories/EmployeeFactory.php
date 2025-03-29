@@ -11,11 +11,22 @@ class EmployeeFactory extends Factory
 
     public function definition()
     {
-        $position = $this->faker->randomElement(['Driver', 'Driver/Technician']);
-        $rate = ($position === 'Driver') ? 600 : 700; // Logical rates
+        $positions = [
+            'Driver' => 600,
+            'Driver/Technician' => 700,
+            'Supervisor' => 900,
+            'Manager' => 1200,
+            'Admin Staff' => 500
+        ];
+        
+        $position = $this->faker->randomElement(array_keys($positions));
+        $rate = $positions[$position];
 
-        $dateHired = $this->faker->dateTimeBetween('-10 years', 'now');
-        $yearsOfService = now()->year - $dateHired->format('Y');
+        $dateHired = $this->faker->dateTimeBetween('-5 years', '-6 months');
+        $yearsOfService = now()->diffInYears($dateHired);
+
+        $birthdate = $this->faker->dateTimeBetween('-50 years', '-20 years');
+        $age = now()->diffInYears($birthdate);
 
         return [
             'employee_number' => now()->year . '-' . str_pad($this->faker->unique()->numberBetween(1, 999), 3, '0', STR_PAD_LEFT),
@@ -25,22 +36,24 @@ class EmployeeFactory extends Factory
             'middle_name' => $this->faker->optional()->lastName,
             'address' => $this->faker->address,
             'position' => $position,
-            'department' => 'Logistics',
+            'department' => $this->faker->randomElement(['Admin', 'Technician', 'Allen One']),
             'date_hired' => $dateHired->format('Y-m-d'),
             'years_of_service' => $yearsOfService,
-            'employment_status' => ($yearsOfService > 1) ? 'active' : 'probationary',
-            'daily_rate' => $rate, // Ensure the correct rate here
-            'civil_status' => $this->faker->randomElement(['single', 'married']),
+            'employment_status' => ($yearsOfService > 1) ? 'Regular' : 'Probationary',
+            'daily_rate' => $rate,
+            'birthdate' => $birthdate->format('Y-m-d'),
+            'age' => $age,
+            'civil_status' => $this->faker->randomElement(['single', 'married', 'widowed']),
             'gender' => $this->faker->randomElement(['male', 'female']),
-            'birthdate' => $this->faker->date('Y-m-d', '-30 years'),
-            'age' => now()->year - date('Y', strtotime($this->faker->date('Y-m-d', '-30 years'))),
             'contacts' => $this->faker->e164PhoneNumber,
-            'sss_no' => $this->faker->regexify('[0-9]{10}'),
-            'tin_no' => $this->faker->regexify('[0-9]{9}'),
-            'philhealth_no' => $this->faker->regexify('[0-9]{12}'),
-            'pagibig_no' => $this->faker->regexify('[0-9]{12}'),
+            'sss_no' => $this->faker->unique()->regexify('[0-9]{10}'),
+            'tin_no' => $this->faker->unique()->regexify('[0-9]{9}'),
+            'philhealth_no' => $this->faker->unique()->regexify('[0-9]{12}'),
+            'pagibig_no' => $this->faker->unique()->regexify('[0-9]{12}'),
             'emergency_contact_name' => $this->faker->name,
             'emergency_contact_mobile' => $this->faker->numerify('09#########'),
+            'created_at' => $dateHired,
+            'updated_at' => $dateHired,
         ];
     }
 }

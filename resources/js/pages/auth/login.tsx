@@ -3,6 +3,7 @@
 import { Head, useForm } from "@inertiajs/react"
 import { LoaderCircle } from "lucide-react"
 import type { FormEventHandler } from "react"
+import { useEffect } from "react"
 
 import InputError from "@/components/input-error"
 import TextLink from "@/components/text-link"
@@ -11,6 +12,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import AuthLayout from "@/layouts/auth-layout"
+import { toast } from "sonner"
 
 type LoginForm = {
   employee_number: string
@@ -21,10 +23,18 @@ type LoginForm = {
 interface LoginProps {
   status?: string
   canResetPassword: boolean
+  csrf_token: string
 }
 
-export default function Login({ status, canResetPassword }: LoginProps) {
-  const { data, setData, post, processing, errors, reset } = useForm<Required<LoginForm>>({
+export default function Login({ status, canResetPassword, csrf_token }: LoginProps) {
+  useEffect(() => {
+    const timeout = new URLSearchParams(window.location.search).get("timeout")
+    if (timeout === "true") {
+      toast.error("Your session has expired. Please log in again.")
+    }
+  }, [])
+
+  const { data, setData, post, processing, errors, reset } = useForm<LoginForm>({
     employee_number: "",
     password: "",
     remember: false,
@@ -33,7 +43,16 @@ export default function Login({ status, canResetPassword }: LoginProps) {
   const submit: FormEventHandler = (e) => {
     e.preventDefault()
     post(route("login"), {
+      data: {
+        ...data,
+        _token: csrf_token
+      },
       onFinish: () => reset("password"),
+      onError: (errors) => {
+        if (errors._token) {
+          window.location.reload()
+        }
+      },
     })
   }
 
@@ -42,6 +61,9 @@ export default function Login({ status, canResetPassword }: LoginProps) {
       <Head title="Log in" />
 
       <form className="flex flex-col gap-6" onSubmit={submit}>
+        {/* Hidden CSRF token field */}
+        <input type="hidden" name="_token" value={csrf_token} />
+
         <div className="grid gap-6">
           <div className="grid gap-2">
             <Label htmlFor="employee_number">Employee Number</Label>

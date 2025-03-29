@@ -209,24 +209,26 @@ const PayrollAutomation = ({ periods = [], employees = [], automationHistory = [
     }
   }
 
-  // Generate payrolls for selected period
+  // Fix the handleGeneratePayrolls function to properly handle the payroll generation
+
   const handleGeneratePayrolls = () => {
-    if (!selectedPeriod) {
-      toast.error("Please select a payroll period")
-      return
-    }
+    // If no period is selected but periods exist, use the first one
+    if (!selectedPeriod && periods.length > 0) {
+      setSelectedPeriod(periods[0].id.toString())
 
-    setIsGenerating(true)
-    setLogOutput("")
-
-    router.post(
-      "/payroll/automation/generate",
-      {
-        period_id: selectedPeriod,
+      // Create the request data with the first period
+      const requestData = {
+        period_id: periods[0].id.toString(),
         send_email: sendEmail,
-        status: payrollStatus, // Include the selected status
-      },
-      {
+        status: payrollStatus,
+      }
+
+      // If specific employees are selected, include them
+      if (selectedEmployees.length > 0) {
+        requestData.employee_ids = selectedEmployees
+      }
+
+      router.post("/payroll/automation/generate", requestData, {
         onSuccess: (page) => {
           const { success, message, details } = page.props.flash || {}
 
@@ -248,11 +250,56 @@ const PayrollAutomation = ({ periods = [], employees = [], automationHistory = [
           setShowLogDialog(true)
           setIsGenerating(false)
         },
+      })
+      return
+    }
+
+    if (!selectedPeriod) {
+      toast.error("Please select a payroll period")
+      return
+    }
+
+    setIsGenerating(true)
+    setLogOutput("")
+
+    // Rest of the existing function...
+    const requestData = {
+      period_id: selectedPeriod,
+      send_email: sendEmail,
+      status: payrollStatus,
+    }
+
+    // If specific employees are selected, include them
+    if (selectedEmployees.length > 0) {
+      requestData.employee_ids = selectedEmployees
+    }
+
+    router.post("/payroll/automation/generate", requestData, {
+      onSuccess: (page) => {
+        const { success, message, details } = page.props.flash || {}
+
+        if (success) {
+          toast.success(message || "Payrolls generated successfully!")
+          setLogOutput(details || "Payrolls generated successfully!")
+        } else {
+          toast.error(message || "Failed to generate payrolls")
+          setLogOutput(details || "Error occurred during payroll generation.")
+        }
+
+        setShowLogDialog(true)
+        setIsGenerating(false)
       },
-    )
+      onError: (errors) => {
+        console.error("Error generating payrolls:", errors)
+        toast.error("An error occurred while generating payrolls")
+        setLogOutput("Error: " + JSON.stringify(errors))
+        setShowLogDialog(true)
+        setIsGenerating(false)
+      },
+    })
   }
 
-  // Send payslip emails
+  // Fix the handleSendEmails function to properly handle email sending
   const handleSendEmails = () => {
     if (!selectedPeriod) {
       toast.error("Please select a payroll period")
@@ -265,6 +312,7 @@ const PayrollAutomation = ({ periods = [], employees = [], automationHistory = [
     }
 
     setIsSendingEmails(true)
+    setLogOutput("")
 
     router.post(
       "/payroll/automation/send-emails",
@@ -274,12 +322,20 @@ const PayrollAutomation = ({ periods = [], employees = [], automationHistory = [
       },
       {
         onSuccess: (page) => {
-          const { success, message } = page.props.flash || {}
+          const { success, message, details } = page.props.flash || {}
 
           if (success) {
             toast.success(message || "Payslip emails sent successfully!")
+            if (details) {
+              setLogOutput(details)
+              setShowLogDialog(true)
+            }
           } else {
             toast.error(message || "Failed to send payslip emails")
+            if (details) {
+              setLogOutput(details)
+              setShowLogDialog(true)
+            }
           }
 
           setIsSendingEmails(false)
@@ -287,6 +343,8 @@ const PayrollAutomation = ({ periods = [], employees = [], automationHistory = [
         onError: (errors) => {
           console.error("Error sending payslip emails:", errors)
           toast.error("An error occurred while sending payslip emails")
+          setLogOutput("Error: " + JSON.stringify(errors))
+          setShowLogDialog(true)
           setIsSendingEmails(false)
         },
       },
