@@ -22,7 +22,6 @@ import {
   RefreshCw,
   FileSpreadsheet,
   Mail,
-  Search,
 } from "lucide-react"
 import AddPayrollModal from "./AddPayrollModal"
 import UpdatePayrollModal from "./UpdatePayrollModal"
@@ -31,7 +30,6 @@ import { toast } from "sonner"
 import PrintPayslip from "./PrintPayslip"
 import { Progress } from "@/components/ui/progress"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { Input } from "@/components/ui/input"
 
 // Import the export utility
 import { exportToCSV } from "../../utils/export-utils"
@@ -145,6 +143,11 @@ const PayrollIndex = ({
     status: "pending",
   })
   const [editingPeriodId, setEditingPeriodId] = useState<number | null>(null)
+  const [attendanceData, setAttendanceData] = useState([])
+  const [summaryDateFilter, setSummaryDateFilter] = useState<string | null>(null)
+  const [dateFilter, setDateFilter] = useState<string | null>(null)
+  const [dailyViewDateFilter, setDailyViewDateFilter] = useState<string>("")
+  const [filters, setFilters] = useState<{ search?: string; status?: string; date?: string }>({})
 
   const { route } = usePage().props
 
@@ -441,21 +444,27 @@ const PayrollIndex = ({
   const refreshData = () => {
     setIsRefreshing(true)
 
-    // Use Inertia visit to reload the current page with any active filters
-    const queryParams = new URLSearchParams()
-    if (statusFilter) queryParams.append("status", statusFilter)
-    if (periodFilter) queryParams.append("period", periodFilter.toString())
+    // Construct the query parameters to preserve filters
+    const params = {}
+    if (searchTerm) params.search = searchTerm
+    if (statusFilter) params.status = statusFilter
+    if (dateFilter) params.date = dateFilter
 
-    router.visit(`/payroll?${queryParams.toString()}`, {
+    router.visit(`/attendance?${new URLSearchParams(params).toString()}`, {
+      preserveScroll: true,
       onSuccess: () => {
         setIsRefreshing(false)
         toast.success("Data refreshed successfully")
+
+        // If we're in daily view and have a date filter, make sure the daily view filter is set
+        if (activeTab === "daily" && dateFilter) {
+          setDailyViewDateFilter(dateFilter)
+        }
       },
       onError: () => {
         setIsRefreshing(false)
         toast.error("Failed to refresh data")
       },
-      preserveState: false,
     })
   }
 
@@ -586,8 +595,6 @@ const PayrollIndex = ({
   }
 
   // Mock attendanceData, summaryDateFilter, and calculatePayAmount for demonstration
-  const [attendanceData, setAttendanceData] = useState([])
-  const [summaryDateFilter, setSummaryDateFilter] = useState<string | null>(null)
 
   const calculatePayAmount = (attendance) => {
     // Replace with your actual calculation logic
@@ -837,6 +844,57 @@ const PayrollIndex = ({
     return () => clearTimeout(timer)
   }, [searchTerm])
 
+  // Add this useEffect to ensure today's date is set as default when no date filter is applied
+  useEffect(() => {
+    // If no date filter is set and we're loading for the first time, set today's date
+    if (!dateFilter && !filters?.date && activeTab === "daily") {
+      const today = new Date().toISOString().split("T")[0]
+      setDailyViewDateFilter(today)
+
+      // Only apply the filter if we have data but none for today
+      //The attendanceByDate variable is undeclared. Please fix the import or declare the variable before using it.
+      const attendanceByDate = {}
+      if (attendanceData.length > 0 && !Object.keys(attendanceByDate).includes(today)) {
+        handleDateFilter(today)
+      }
+    }
+  }, [attendanceData, dateFilter, filters, activeTab])
+
+  // Modify the handleDateFilter function to ensure it properly updates the URL and fetches data
+  const handleDateFilter = (value) => {
+    setDateFilter(value || null)
+
+    // If we're in daily view, also update the daily view filter
+    if (activeTab === "daily") {
+      setDailyViewDateFilter(value || "")
+    }
+
+    // Use router.get to update the URL and fetch data
+    router.get(
+      "/attendance",
+      { search: searchTerm, status: statusFilter, date: value || null },
+      { preserveScroll: true },
+    )
+  }
+
+  // Add this function to specifically load today's data
+  const loadTodayData = () => {
+    const today = new Date().toISOString().split("T")[0]
+    setDateFilter(today)
+    setDailyViewDateFilter(today)
+
+    router.get(
+      "/attendance",
+      { search: searchTerm, status: statusFilter, date: today },
+      {
+        preserveScroll: true,
+        onSuccess: () => {
+          toast.success("Loaded today's attendance data")
+        },
+      },
+    )
+  }
+
   return (
     <AppLayout
       breadcrumbs={[
@@ -1053,67 +1111,86 @@ const PayrollIndex = ({
           </Card>
         </div>
 
-        {/* Search & Filter Section */}
-        <Card className="p-4 mb-6 border border-slate-200 dark:border-slate-700 shadow-sm">
-          <div className="mb-4 flex flex-col md:flex-row gap-2 items-center">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 dark:text-slate-600 h-4 w-4" />
-              <Input
-                placeholder="Search by employee name or number..."
-                className="pl-9 w-full"
-                value={searchTerm}
-                onChange={handleSearchChange}
-              />
-            </div>
-
-            <select
-              className="p-2 border rounded-md bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 transition-all"
-              value={statusFilter ?? ""}
-              onChange={(e) => handleStatusFilterChange(e.target.value || null)}
-            >
-              <option value="">All Statuses</option>
-              <option value="generated">Generated</option>
-              <option value="approved">Approved</option>
-              <option value="paid">Paid</option>
-              <option value="pending">Pending</option>
-              <option value="rejected">Rejected</option>
-            </select>
-
-            <select
-              className="p-2 border rounded-md bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 transition-all"
-              value={periodFilter?.toString() ?? ""}
-              onChange={(e) => handlePeriodFilterChange(e.target.value ? Number(e.target.value) : null)}
-            >
-              <option value="">All Periods</option>
-              {payrollPeriods.map((period) => (
-                <option key={period.id} value={period.week_id.toString()}>
-                  Week ID: {period.week_id} (
-                  {new Date(period.period_start).toLocaleDateString("en-US", {
-                    month: "short",
-                    day: "numeric",
-                  })}{" "}
-                  -{" "}
-                  {new Date(period.period_end).toLocaleDateString("en-US", {
-                    month: "short",
-                    day: "numeric",
-                  })}
-                  )
-                </option>
-              ))}
-            </select>
-
-            <Button variant="outline" onClick={handleClearFilters} className="whitespace-nowrap">
-              Clear Filters
-            </Button>
-          </div>
-        </Card>
-
-        {/* Tabs Navigation */}
-        <Tabs defaultValue="entries" className="mb-6" value={activeTab} onValueChange={setActiveTab as any}>
+        {/* Tabs Navigation - Moved above search */}
+        <Tabs
+          defaultValue="entries"
+          className="mb-6"
+          value={activeTab}
+          onValueChange={(value) => {
+            setActiveTab(value as "entries" | "periods")
+          }}
+        >
           <TabsList className="mb-4">
             <TabsTrigger value="entries">Payroll Entries</TabsTrigger>
             <TabsTrigger value="periods">Payroll Periods</TabsTrigger>
           </TabsList>
+
+          {/* Search & Filter Section - Conditionally rendered based on active tab */}
+          {activeTab === "entries" && (
+            <Card className="p-4 mb-6 border border-slate-200 dark:border-slate-700 shadow-sm">
+              <div className="mb-4 flex flex-col md:flex-row gap-2 items-center">
+                <div className="relative flex-1">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="20"
+                    height="20"
+                    fill="currentColor"
+                    className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 dark:text-slate-600"
+                    viewBox="0 0 1792 1792"
+                  >
+                    <path d="M1216 832q0-52-38-90t-90-38q-54 0-90 38t-36 90q0 52 36 90t90 38q52 0 90-38t38-90zm640 896q0 52-38 90t-90 38h-1408q-52 0-90-38t-38-90v-704q0-52 38-90t90-38h352q0-54-19-90t-53-56q-34-27-53-56t-19-90h-384q-52 0-90-38t-38-90v-64q0-52 38-90t90-38h1408q52 0 90 38t38 90v64q0 52-38 90t-90 38h-384q0 54 19 90t53 56q34 27 53 56t19 90h352q52 0 90 38t38 90v704zm-1344-160q0 80-56 136t-136 56q-80 0-136-56t-56-136q0-80 56-136t136-56q80 0 136 56t56 136z" />
+                  </svg>
+                  <input
+                    type="text"
+                    placeholder="Search by employee name or number..."
+                    className="pl-10 p-2 w-full border rounded-md bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 transition-all"
+                    value={searchTerm}
+                    onChange={handleSearchChange}
+                  />
+                </div>
+
+                <select
+                  className="p-2 border rounded-md bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 transition-all"
+                  value={statusFilter ?? ""}
+                  onChange={(e) => handleStatusFilterChange(e.target.value || null)}
+                >
+                  <option value="">All Statuses</option>
+                  <option value="generated">Generated</option>
+                  <option value="approved">Approved</option>
+                  <option value="paid">Paid</option>
+                  <option value="pending">Pending</option>
+                  <option value="rejected">Rejected</option>
+                </select>
+
+                <select
+                  className="p-2 border rounded-md bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 transition-all"
+                  value={periodFilter?.toString() ?? ""}
+                  onChange={(e) => handlePeriodFilterChange(e.target.value ? Number(e.target.value) : null)}
+                >
+                  <option value="">All Periods</option>
+                  {payrollPeriods.map((period) => (
+                    <option key={period.id} value={period.week_id.toString()}>
+                      Week ID: {period.week_id} (
+                      {new Date(period.period_start).toLocaleDateString("en-US", {
+                        month: "short",
+                        day: "numeric",
+                      })}{" "}
+                      -{" "}
+                      {new Date(period.period_end).toLocaleDateString("en-US", {
+                        month: "short",
+                        day: "numeric",
+                      })}
+                      )
+                    </option>
+                  ))}
+                </select>
+
+                <Button variant="outline" onClick={handleClearFilters} className="whitespace-nowrap">
+                  Clear Filters
+                </Button>
+              </div>
+            </Card>
+          )}
 
           <TabsContent value="entries" className="mt-0">
             {isLoading ? (
@@ -1201,8 +1278,8 @@ const PayrollIndex = ({
                             <td className="py-3 px-4">{payroll.week_id}</td>
                             <td className="py-3 px-4">
                               {getPayrollPeriodName(payroll.week_id)
-                                .replace(/^[0-9]+ \(\(/, "")
-                                .replace(/\)\)$/, "")}
+                                .replace(/^[0-9]+ $$/, "")
+                                .replace(/$$$/, "")}
                             </td>
                             <td className="py-3 px-4">{formatCurrency(payroll.gross_pay)}</td>
                             <td className="py-3 px-4">{formatCurrency(payroll.total_deductions)}</td>

@@ -15,54 +15,59 @@ use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 class AttendanceController extends Controller
 {
     public function index(Request $request)
-    {
-        $query = DB::table('attendance')
-            ->select(
-                'attendance.id',
-                'attendance.employee_number',
-                'attendance.work_date',
-                'attendance.daily_rate',
-                'attendance.adjustment',
-                'attendance.status',
-                'employees.full_name'
-            )
-            ->leftJoin('employees', 'attendance.employee_number', '=', 'employees.employee_number');
-        
-        // Apply search filter
-        if ($request->has('search') && !empty($request->search)) {
-            $search = $request->search;
-            $query->where(function($q) use ($search) {
-                $q->where('attendance.employee_number', 'like', "%{$search}%")
-                  ->orWhere('employees.full_name', 'like', "%{$search}%");
-            });
-        }
-        
-        // Apply status filter
-        if ($request->has('status') && !empty($request->status)) {
-            $query->where('attendance.status', $request->status);
-        }
-        
-        // Apply date filter
-        if ($request->has('date') && !empty($request->date)) {
+{
+    // Set default date to today if no date filter is provided
+    $date = $request->date ?: date('Y-m-d');
+    
+    $query = DB::table('attendance')
+        ->select(
+            'attendance.id',
+            'attendance.employee_number',
+            'attendance.work_date',
+            'attendance.daily_rate',
+            'attendance.adjustment',
+            'attendance.status',
+            'employees.full_name'
+        )
+        ->leftJoin('employees', 'attendance.employee_number', '=', 'employees.employee_number');
+    
+    // Apply search filter
+    if ($request->has('search') && !empty($request->search)) {
+        $search = $request->search;
+        $query->where(function($q) use ($search) {
+            $q->where('attendance.employee_number', 'like', "%{$search}%")
+              ->orWhere('employees.full_name', 'like', "%{$search}%");
+        });
+    }
+    
+    // Apply status filter
+    if ($request->has('status') && !empty($request->status)) {
+        $query->where('attendance.status', $request->status);
+    }
+    
+    // Apply date filter - only if explicitly provided in the request
+    if ($request->has('date')) {
+        if (!empty($request->date)) {
             $query->where('attendance.work_date', $request->date);
         }
-        
-        // Apply sorting
-        $query->orderBy('attendance.work_date', 'desc');
-        
-        // Get paginated results
-        $attendances = $query->paginate(15)->withQueryString();
-        
-        $employees = Employee::select('id', 'employee_number', 'full_name', 'daily_rate')->get();
-        $payrollPeriods = DB::table('payroll_periods')->get();
-
-        return Inertia::render('Attendance/Index', [
-            'attendances' => $attendances,
-            'employees' => $employees,
-            'payrollPeriods' => $payrollPeriods,
-            'filters' => $request->only(['search', 'status', 'date']),
-        ]);
     }
+    
+    // Apply sorting
+    $query->orderBy('attendance.work_date', 'desc');
+    
+    // Get paginated results
+    $attendances = $query->paginate(15)->withQueryString();
+    
+    $employees = Employee::select('id', 'employee_number', 'full_name', 'daily_rate')->get();
+    $payrollPeriods = DB::table('payroll_periods')->get();
+
+    return Inertia::render('Attendance/Index', [
+        'attendances' => $attendances,
+        'employees' => $employees,
+        'payrollPeriods' => $payrollPeriods,
+        'filters' => $request->only(['search', 'status', 'date']),
+    ]);
+}
 
     public function create()
     {

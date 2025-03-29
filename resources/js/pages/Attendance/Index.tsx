@@ -1120,30 +1120,7 @@ const AttendanceIndex = ({
           </div>
         </div>
 
-        {/* Debug Info Alert - Only show if no attendance records */}
-        {attendanceData.length === 0 && (
-          <Alert className="mb-6 bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-400">
-            <Info className="h-4 w-4" />
-            <AlertTitle>No attendance records found</AlertTitle>
-            <AlertDescription className="mt-2">
-              <p className="mb-2">There are no attendance records in the system. You can:</p>
-              <ul className="list-disc pl-5 space-y-1">
-                <li>Add records manually using the "Add Record" button</li>
-                <li>Import records using the "Bulk Add" button</li>
-                <li>
-                  <Button
-                    variant="link"
-                    onClick={addSampleData}
-                    className="p-0 h-auto text-amber-800 dark:text-amber-400 underline"
-                  >
-                    Click here to add sample data for testing
-                  </Button>
-                </li>
-              </ul>
-              <p className="mt-2 text-xs">{debugInfo}</p>
-            </AlertDescription>
-          </Alert>
-        )}
+
 
         {/* Weekly Attendance Progress */}
         <Card className="p-5 border border-slate-200 dark:border-slate-700 mb-6">
