@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Calendar } from "lucide-react"
 import { toast } from "sonner"
+import { router } from "@inertiajs/react"
 
 interface Employee {
   id: number
@@ -56,6 +57,7 @@ const AddAttendanceModal = ({ onClose, onSubmit, employees }: AddAttendanceModal
 
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null)
+
 
   // Handle employee selection
   const handleEmployeeChange = (employeeNumber: string) => {
@@ -164,26 +166,74 @@ const AddAttendanceModal = ({ onClose, onSubmit, employees }: AddAttendanceModal
     const employeeName = selectedEmployee?.full_name || "this employee"
 
     try {
-      // Submit the data
-      await onSubmit(formattedData)
+      // Check if a record already exists for this employee and date using Inertia
+      router.get(
+        `/attendance/check-existing?employee_number=${formData.employee_number}&work_date=${formData.work_date}`,
+        {
+          preserveState: true,
+          only: ["exists"],
+          onSuccess: (page) => {
+            if (page.props.exists) {
+              toast.error(`An attendance record already exists for ${employeeName} on ${formData.work_date}`)
+              setIsSubmitting(false)
+            } else {
+              // If no existing record, proceed with submission
+              router.post("/attendance", formattedData, {
+                preserveScroll: true,
+                onSuccess: () => {
+                  toast.success(`Attendance record added for ${employeeName}`)
+                  onClose()
+                },
+                onError: (errors) => {
+                  console.error("Submission error:", errors)
 
-      // Only show success and close if the submission was successful
-      toast.success(`Attendance record added for ${employeeName}`)
-      onClose()
+                  // Check for duplicate entry error in the response
+                  if (typeof errors === "object") {
+                    Object.entries(errors).forEach(([field, message]) => {
+                      if (typeof message === "string" && message.toLowerCase().includes("duplicate")) {
+                        toast.error(`An attendance record already exists for ${employeeName} on ${formData.work_date}`)
+                      } else {
+                        toast.error(`${field}: ${message}`)
+                      }
+                    })
+                  } else {
+                    toast.error("Failed to add attendance record")
+                  }
+                  setIsSubmitting(false)
+                },
+              })
+            }
+          },
+          onError: () => {
+            // If check fails, try to submit anyway
+            router.post("/attendance", formattedData, {
+              preserveScroll: true,
+              onSuccess: () => {
+                toast.success(`Attendance record added for ${employeeName}`)
+                onClose()
+              },
+              onError: (errors) => {
+                // Handle duplicate entry errors
+                if (typeof errors === "object") {
+                  Object.entries(errors).forEach(([field, message]) => {
+                    if (typeof message === "string" && message.toLowerCase().includes("duplicate")) {
+                      toast.error(`An attendance record already exists for ${employeeName} on ${formData.work_date}`)
+                    } else {
+                      toast.error(`${field}: ${message}`)
+                    }
+                  })
+                } else {
+                  toast.error("Failed to add attendance record")
+                }
+                setIsSubmitting(false)
+              },
+            })
+          },
+        },
+      )
     } catch (error) {
-      console.error("Submission error:", error)
-
-      // Check for duplicate entry error
-      if (
-        error.message &&
-        error.message.includes("Duplicate entry") &&
-        error.message.includes("attendance_employee_number_work_date_unique")
-      ) {
-        toast.error(`An attendance record already exists for ${employeeName} on ${formData.work_date}`)
-      } else {
-        toast.error("Failed to add attendance record: " + (error.message || "Unknown error"))
-      }
-    } finally {
+      console.error("Error in submission process:", error)
+      toast.error("An unexpected error occurred. Please try again.")
       setIsSubmitting(false)
     }
   }

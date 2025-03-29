@@ -5,9 +5,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { toast } from "sonner"
 import { Calendar } from "lucide-react"
+import { router } from "@inertiajs/react"
 
 interface Attendance {
   id: number
@@ -53,6 +53,7 @@ const UpdateAttendanceModal = ({ attendance, onClose, onSubmit, employees = [] }
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [quickSelect, setQuickSelect] = useState<string | null>(attendance.status)
 
+
   const handleChange = (e) => {
     const { name, value } = e.target
     setFormData((prev) => ({
@@ -78,6 +79,8 @@ const UpdateAttendanceModal = ({ attendance, onClose, onSubmit, employees = [] }
     }))
   }
 
+  // Replace the handleSubmit function with this implementation:
+
   const handleSubmit = (e) => {
     e.preventDefault()
 
@@ -97,34 +100,62 @@ const UpdateAttendanceModal = ({ attendance, onClose, onSubmit, employees = [] }
     }
 
     setIsSubmitting(true)
-    try {
-      // Check if we're changing the date to a date that might already exist for this employee
-      if (formData.work_date !== attendance.work_date) {
-        // This is a date change, so we should check if there's already an attendance record for this date
-        console.log("Date changed, checking for existing records")
-        // In a real implementation, you would check against your database here
-        // For now, we'll just proceed with the update
-      }
 
-      onSubmit(formattedData)
-      toast.success("Attendance record updated successfully")
-      onClose()
-    } catch (error) {
-      console.error("Error updating attendance:", error)
-
-      // Check for duplicate entry error
-      if (
-        error.message &&
-        error.message.includes("Duplicate entry") &&
-        error.message.includes("attendance_employee_number_work_date_unique")
-      ) {
-        toast.error(`An attendance record already exists for this employee on ${formData.work_date}`)
-      } else {
-        toast.error("Failed to update attendance. Please try again.")
-      }
-    } finally {
-      setIsSubmitting(false)
+    // Check if we're changing the date to a date that might already exist for this employee
+    if (formData.work_date !== attendance.work_date) {
+      // This is a date change, so we should check if there's already an attendance record for this date
+      router.get(
+        `/attendance/check-existing?employee_number=${formData.employee_number}&work_date=${formData.work_date}&exclude_id=${formData.id}`,
+        {
+          preserveState: true,
+          only: ["exists"],
+          onSuccess: (page) => {
+            if (page.props.exists) {
+              toast.error(`An attendance record already exists for this employee on ${formData.work_date}`)
+              setIsSubmitting(false)
+            } else {
+              // Proceed with the update
+              proceedWithUpdate(formattedData)
+            }
+          },
+          onError: () => {
+            // If check fails, try to update anyway
+            proceedWithUpdate(formattedData)
+          },
+        },
+      )
+    } else {
+      // No date change, proceed with update
+      proceedWithUpdate(formattedData)
     }
+  }
+
+  // Helper function to proceed with the update
+  const proceedWithUpdate = (formattedData) => {
+    router.put(`/attendance/${formattedData.id}`, formattedData, {
+      preserveScroll: true,
+      onSuccess: () => {
+        toast.success("Attendance record updated successfully")
+        onClose()
+      },
+      onError: (errors) => {
+        console.error("Update error:", errors)
+
+        // Check for duplicate entry error in the response
+        if (typeof errors === "object") {
+          Object.entries(errors).forEach(([field, message]) => {
+            if (typeof message === "string" && message.toLowerCase().includes("duplicate")) {
+              toast.error(`An attendance record already exists for this employee on ${formattedData.work_date}`)
+            } else {
+              toast.error(`${field}: ${message}`)
+            }
+          })
+        } else {
+          toast.error("Failed to update attendance record")
+        }
+        setIsSubmitting(false)
+      },
+    })
   }
 
   const getStatusBadgeColor = (status: string) => {
@@ -263,7 +294,6 @@ const UpdateAttendanceModal = ({ attendance, onClose, onSubmit, employees = [] }
                 SP
               </Button>
             </div>
-           
           </div>
 
           <div className="space-y-2">

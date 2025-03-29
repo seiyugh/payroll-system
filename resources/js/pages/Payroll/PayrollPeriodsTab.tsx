@@ -17,7 +17,6 @@ import {
   PaginationItem,
   PaginationPrevious,
   PaginationNext,
-  PaginationEllipsis,
 } from "../../../components/ui/pagination"
 import { toast } from "sonner"
 import { Calendar, Edit, FileText, Filter, Plus, RefreshCw, Search, Trash2, Zap } from "lucide-react"
@@ -148,17 +147,29 @@ const PayrollPeriodsTab = ({ periods = [], onPeriodSelect, onTabChange }: Payrol
     e.preventDefault()
     setIsLoading(true)
 
+    const formData = {
+      week_id: periodFormData.week_id,
+      period_start: periodFormData.period_start,
+      period_end: periodFormData.period_end,
+      payment_date: periodFormData.payment_date,
+      status: periodFormData.status,
+      description: periodFormData.description || "",
+    }
+
+    console.log("Submitting period data:", formData)
+
     if (editingPeriod) {
       // Update existing period
-      router.put(`/payroll/periods/${editingPeriod.id}`, periodFormData, {
+      router.put(`/payroll/periods/${editingPeriod.id}`, formData, {
         onSuccess: () => {
           toast.success("Payroll period updated successfully!")
           setIsEditModalOpen(false)
           setEditingPeriod(null)
           setIsLoading(false)
-          refreshData()
+          router.reload() // Use reload instead of custom refreshData
         },
         onError: (errors) => {
+          console.error("Update period error:", errors)
           Object.entries(errors).forEach(([field, message]) => {
             toast.error(`${field}: ${message}`)
           })
@@ -167,14 +178,15 @@ const PayrollPeriodsTab = ({ periods = [], onPeriodSelect, onTabChange }: Payrol
       })
     } else {
       // Create new period
-      router.post("/payroll/periods", periodFormData, {
+      router.post("/payroll/periods", formData, {
         onSuccess: () => {
           toast.success("Payroll period created successfully!")
           setIsNewPeriodModalOpen(false)
           setIsLoading(false)
-          refreshData()
+          router.reload() // Use reload instead of custom refreshData
         },
         onError: (errors) => {
+          console.error("Create period error:", errors)
           Object.entries(errors).forEach(([field, message]) => {
             toast.error(`${field}: ${message}`)
           })
@@ -201,14 +213,18 @@ const PayrollPeriodsTab = ({ periods = [], onPeriodSelect, onTabChange }: Payrol
   // Handle delete period
   const handleDeletePeriod = (id: number) => {
     setIsLoading(true)
-    router.delete(`/payroll/periods/${id}?force_delete=true`, {
+    console.log("Deleting period ID:", id)
+
+    router.delete(`/payroll/periods/${id}`, {
+      data: { force_delete: true }, // Send as data payload
       onSuccess: () => {
         toast.success("Payroll period deleted successfully!")
         setConfirmDeleteId(null)
         setIsLoading(false)
-        refreshData()
+        router.reload() // Use reload instead of custom refreshData
       },
       onError: (errors) => {
+        console.error("Delete period error:", errors)
         Object.entries(errors).forEach(([field, message]) => {
           toast.error(`${field}: ${message}`)
         })
@@ -220,6 +236,8 @@ const PayrollPeriodsTab = ({ periods = [], onPeriodSelect, onTabChange }: Payrol
   // Handle generate payroll
   const handleGeneratePayroll = (weekId: number) => {
     setIsLoading(true)
+    console.log("Generating payroll for week ID:", weekId)
+
     router.post(
       "/payroll/generate",
       { week_id: weekId },
@@ -227,12 +245,17 @@ const PayrollPeriodsTab = ({ periods = [], onPeriodSelect, onTabChange }: Payrol
         onSuccess: () => {
           toast.success("Payroll generated successfully for this period!")
           setIsLoading(false)
-          refreshData()
+          router.reload() // Use reload instead of custom refreshData
         },
         onError: (errors) => {
-          Object.entries(errors).forEach(([field, message]) => {
-            toast.error(`${field}: ${message}`)
-          })
+          console.error("Generate payroll error:", errors)
+          if (typeof errors === "object") {
+            Object.entries(errors).forEach(([field, message]) => {
+              toast.error(`${field}: ${message}`)
+            })
+          } else {
+            toast.error("Failed to generate payroll")
+          }
           setIsLoading(false)
         },
       },
