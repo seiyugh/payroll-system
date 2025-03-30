@@ -980,18 +980,12 @@ const PayrollIndex = ({
             <Button
               variant="outline"
               onClick={openAddModal}
-              className="border-indigo-200 text-indigo-600 hover:border-indigo-300 dark:border-indigo-800 dark:text-indigo-400 dark:hover:border-indigo-700"
+              className="border-indigo-200 text-indigo-600  hover:border-indigo-300 dark:border-indigo-800 dark:text-indigo-400 dark:hover:border-indigo-700"
             >
               <Plus className="h-4 w-4 mr-1" />
               Add Payroll
             </Button>
-            <Button
-              onClick={() => setIsNewPeriodModalOpen(true)}
-              className="bg-indigo-600 hover:bg-indigo-700 text-white"
-            >
-              <Calendar className="h-4 w-4 mr-1" />
-              New Period
-            </Button>
+            
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
