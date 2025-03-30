@@ -38,6 +38,7 @@ interface PayrollEntry {
   id: number
   employee_number: string
   full_name: string // This comes from the join with employees table
+  department_name?: string // Add this field
   week_id: number
   daily_rates: string | number
   gross_pay: string
@@ -92,6 +93,7 @@ interface PayrollIndexProps {
   payrollPeriods?: PayrollPeriod[]
   employees?: any[]
   attendances?: any[]
+  departments?: string[] // Add this line
 }
 
 interface PeriodSelectProps {
@@ -121,10 +123,12 @@ const PayrollIndex = ({
   payrollPeriods = [],
   employees = [],
   attendances = [],
+  departments = [], // Add this line
 }: PayrollIndexProps) => {
   const [searchTerm, setSearchTerm] = useState("")
   const [statusFilter, setStatusFilter] = useState<string | null>(null)
   const [periodFilter, setPeriodFilter] = useState<number | null>(null)
+  const [departmentFilter, setDepartmentFilter] = useState<string | null>(null) // Add department filter
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false)
   const [selectedPayroll, setSelectedPayroll] = useState<PayrollEntry | null>(null)
@@ -173,7 +177,7 @@ const PayrollIndex = ({
   // Update the useEffect for data loading and add proper Inertia data handling
   useEffect(() => {
     // If we have data from Inertia, we're not loading
-    if (payrollEntries.data.length > 0 || payrollPeriods.length > 0) {
+    if (payrollEntries?.data?.length > 0 || (Array.isArray(payrollPeriods) && payrollPeriods.length > 0)) {
       setIsLoading(false)
     } else {
       // Short timeout to prevent flash of loading state if data loads quickly
@@ -185,18 +189,18 @@ const PayrollIndex = ({
   }, [payrollEntries, payrollPeriods])
 
   // Update the useEffect for initializing state from URL parameters
-  // Add this after the existing useEffect blocks, around line 100
-
   useEffect(() => {
     // Initialize state from URL parameters on first load
     const params = new URLSearchParams(window.location.search)
     const searchParam = params.get("search")
     const statusParam = params.get("status")
     const periodParam = params.get("period")
+    const departmentParam = params.get("department")
 
     if (searchParam) setSearchTerm(searchParam)
     if (statusParam) setStatusFilter(statusParam)
     if (periodParam) setPeriodFilter(Number(periodParam))
+    if (departmentParam) setDepartmentFilter(departmentParam)
   }, [])
 
   // Handle session expiration
@@ -237,7 +241,7 @@ const PayrollIndex = ({
   // Update the openAddModal function to include validation
   const openAddModal = () => {
     // Check if there are any payroll periods before opening the modal
-    if (payrollPeriods.length === 0) {
+    if (!Array.isArray(payrollPeriods) || payrollPeriods.length === 0) {
       toast.error("No payroll periods available. Please create a new period first.")
       return
     }
@@ -326,6 +330,11 @@ const PayrollIndex = ({
   }
 
   const getPayrollPeriodName = (periodId: number) => {
+    // First check if payrollPeriods is an array
+    if (!Array.isArray(payrollPeriods)) {
+      return "Loading period details..."
+    }
+
     // First try to find by id
     const period = payrollPeriods.find((p) => p.id === periodId)
 
@@ -388,16 +397,21 @@ const PayrollIndex = ({
     setSearchTerm("")
     setStatusFilter(null)
     setPeriodFilter(null)
+    setDepartmentFilter(null)
   }
 
   // Print payroll - using actual data
-  const printPayroll = (payroll: PayrollEntry) => {
+  const printPayroll = (payroll: PayrollEntry, overwrite = false) => {
+    // Show loading state
+    toast.loading("Preparing payslip...")
+
     // Use Inertia to visit the print route directly
     router.post(
       `/payroll/${payroll.id}/print`,
-      {},
+      { overwrite: overwrite },
       {
         onSuccess: (page) => {
+          toast.dismiss()
           // Get the attendance records from the response
           const attendanceRecords = page.props.attendances || []
 
@@ -406,7 +420,12 @@ const PayrollIndex = ({
             ...payroll,
             attendanceRecords: attendanceRecords,
             // Include the period data if we have it
-            payroll_period: payrollPeriods.find((p) => p.id === payroll.week_id) || undefined,
+            payroll_period:
+              page.props.period ||
+              (Array.isArray(payrollPeriods)
+                ? payrollPeriods.find((p) => p.id === payroll.week_id || p.week_id === payroll.week_id)
+                : undefined),
+            overwrite: page.props.overwrite || false,
           }
 
           // Open the print modal with the enhanced payroll data
@@ -414,6 +433,7 @@ const PayrollIndex = ({
           setIsPrintModalOpen(true)
         },
         onError: (errors) => {
+          toast.dismiss()
           console.error("Error fetching payroll data for printing:", errors)
           toast.error("Failed to fetch payroll data for printing")
         },
@@ -449,8 +469,9 @@ const PayrollIndex = ({
     if (searchTerm) params.search = searchTerm
     if (statusFilter) params.status = statusFilter
     if (dateFilter) params.date = dateFilter
+    if (departmentFilter) params.department = departmentFilter
 
-    router.visit(`/attendance?${new URLSearchParams(params).toString()}`, {
+    router.visit(`/payroll?${new URLSearchParams(params).toString()}`, {
       preserveScroll: true,
       onSuccess: () => {
         setIsRefreshing(false)
@@ -534,6 +555,7 @@ const PayrollIndex = ({
           ID: payroll.id,
           EmployeeNumber: payroll.employee_number,
           EmployeeName: payroll.full_name,
+          Department: payroll.department_name || "",
           WeekID: payroll.week_id,
           PayrollPeriod: periodName,
           GrossPay: grossPay,
@@ -566,6 +588,24 @@ const PayrollIndex = ({
     }
   }
 
+  // Handle department filter change
+  const handleDepartmentFilterChange = (newValue: string | null) => {
+    setDepartmentFilter(newValue)
+
+    const params = new URLSearchParams(window.location.search)
+    if (newValue) {
+      params.set("department", newValue)
+    } else {
+      params.delete("department")
+    }
+
+    router.visit(`/payroll?${params.toString()}`, {
+      preserveState: true,
+      preserveScroll: true,
+      only: ["payrollEntries", "payrollPeriods", "payrollSummary"],
+    })
+  }
+
   // Update the filter handling to use Inertia
   const applyFilters = (resetPage = true) => {
     setIsLoading(true)
@@ -579,6 +619,9 @@ const PayrollIndex = ({
 
     if (periodFilter) params.set("period", periodFilter.toString())
     else params.delete("period")
+
+    if (departmentFilter) params.set("department", departmentFilter)
+    else params.delete("department")
 
     if (resetPage) params.set("page", "1") // Reset to first page when filters change
 
@@ -595,7 +638,6 @@ const PayrollIndex = ({
   }
 
   // Mock attendanceData, summaryDateFilter, and calculatePayAmount for demonstration
-
   const calculatePayAmount = (attendance) => {
     // Replace with your actual calculation logic
     return Number.parseFloat(attendance.daily_rate?.toString() || "0") || 0
@@ -635,7 +677,22 @@ const PayrollIndex = ({
       return
     }
 
-    const selectedPeriod = payrollPeriods?.find((period) => period.week_id === newValue || period.id === newValue)
+    // Check if payrollPeriods is an array before using find
+    if (!Array.isArray(payrollPeriods)) {
+      setPeriodFilter(newValue)
+
+      const params = new URLSearchParams(window.location.search)
+      params.set("period", newValue.toString())
+
+      router.visit(`/payroll?${params.toString()}`, {
+        preserveState: true,
+        preserveScroll: true,
+        only: ["payrollEntries", "payrollPeriods", "payrollSummary"],
+      })
+      return
+    }
+
+    const selectedPeriod = payrollPeriods.find((period) => period.week_id === newValue || period.id === newValue)
 
     if (selectedPeriod) {
       setPeriodFilter(selectedPeriod.week_id)
@@ -650,6 +707,7 @@ const PayrollIndex = ({
       })
     }
   }
+
   // Update the clear filters function
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value
@@ -674,11 +732,13 @@ const PayrollIndex = ({
 
     return () => clearTimeout(timer)
   }
+
   // Update handleClearFilters to properly clear the URL parameters too
   const handleClearFilters = () => {
     setSearchTerm("")
     setStatusFilter(null)
     setPeriodFilter(null)
+    setDepartmentFilter(null)
 
     // Clear URL parameters and reload data
     router.visit("/payroll", {
@@ -812,6 +872,7 @@ const PayrollIndex = ({
       })
       .filter((payroll) => (statusFilter ? payroll.status === statusFilter : true))
       .filter((payroll) => (periodFilter ? payroll.week_id === periodFilter : true))
+      .filter((payroll) => (departmentFilter ? payroll.department_name === departmentFilter : true))
       .sort((a, b) => {
         const sortFactor = sortDirection === "asc" ? 1 : -1
 
@@ -824,10 +885,11 @@ const PayrollIndex = ({
         } else if (sortField === "total_deductions") {
           return (Number(a.total_deductions) - Number(b.total_deductions)) * sortFactor
         } else {
+          // Default to sorting by ID in descending order
           return (a.id - b.id) * sortFactor
         }
       })
-  }, [payrollData, searchTerm, statusFilter, periodFilter, sortField, sortDirection])
+  }, [payrollData, searchTerm, statusFilter, periodFilter, departmentFilter, sortField, sortDirection])
 
   // Remove the payrollSummaryData calculation since we're now using the server-provided payrollSummary
   // Delete this block:
@@ -852,9 +914,12 @@ const PayrollIndex = ({
       setDailyViewDateFilter(today)
 
       // Only apply the filter if we have data but none for today
-      //The attendanceByDate variable is undeclared. Please fix the import or declare the variable before using it.
       const attendanceByDate = {}
-      if (attendanceData.length > 0 && !Object.keys(attendanceByDate).includes(today)) {
+      if (
+        Array.isArray(attendanceData) &&
+        attendanceData.length > 0 &&
+        !Object.keys(attendanceByDate).includes(today)
+      ) {
         handleDateFilter(today)
       }
     }
@@ -1168,21 +1233,38 @@ const PayrollIndex = ({
                   onChange={(e) => handlePeriodFilterChange(e.target.value ? Number(e.target.value) : null)}
                 >
                   <option value="">All Periods</option>
-                  {payrollPeriods.map((period) => (
-                    <option key={period.id} value={period.week_id.toString()}>
-                      Week ID: {period.week_id} (
-                      {new Date(period.period_start).toLocaleDateString("en-US", {
-                        month: "short",
-                        day: "numeric",
-                      })}{" "}
-                      -{" "}
-                      {new Date(period.period_end).toLocaleDateString("en-US", {
-                        month: "short",
-                        day: "numeric",
-                      })}
-                      )
-                    </option>
-                  ))}
+                  {Array.isArray(payrollPeriods) &&
+                    payrollPeriods.map((period) => (
+                      <option key={period.id} value={period.week_id.toString()}>
+                        Week ID: {period.week_id} (
+                        {new Date(period.period_start).toLocaleDateString("en-US", {
+                          month: "short",
+                          day: "numeric",
+                        })}{" "}
+                        -{" "}
+                        {new Date(period.period_end).toLocaleDateString("en-US", {
+                          month: "short",
+                          day: "numeric",
+                        })}
+                        )
+                      </option>
+                    ))}
+                </select>
+
+                {/* Department filter dropdown */}
+                <select
+                  className="p-2 border rounded-md bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 transition-all"
+                  value={departmentFilter ?? ""}
+                  onChange={(e) => handleDepartmentFilterChange(e.target.value || null)}
+                >
+                  <option value="">All Departments</option>
+                  {/* Use the departments array from props instead of extracting from payroll entries */}
+                  {Array.isArray(departments) &&
+                    departments.map((dept) => (
+                      <option key={dept} value={dept}>
+                        {dept}
+                      </option>
+                    ))}
                 </select>
 
                 <Button variant="outline" onClick={handleClearFilters} className="whitespace-nowrap">
@@ -1204,7 +1286,7 @@ const PayrollIndex = ({
                     <thead className="sticky top-0 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
                       <tr>
                         <th
-                          className="py-3 px-4 text-left font-semibold cursor-pointer"
+                          className="py-3 px-2 text-left font-semibold cursor-pointer w-16"
                           onClick={() => toggleSort("id")}
                         >
                           <div className="flex items-center">
@@ -1214,9 +1296,9 @@ const PayrollIndex = ({
                             )}
                           </div>
                         </th>
-                        <th className="py-3 px-4 text-left font-semibold">Emp #</th>
+                        <th className="py-3 px-2 text-left font-semibold w-24">Emp #</th>
                         <th
-                          className="py-3 px-4 text-left font-semibold cursor-pointer"
+                          className="py-3 px-2 text-left font-semibold cursor-pointer"
                           onClick={() => toggleSort("full_name")}
                         >
                           <div className="flex items-center">
@@ -1226,10 +1308,11 @@ const PayrollIndex = ({
                             )}
                           </div>
                         </th>
-                        <th className="py-3 px-4 text-left font-semibold">Week ID</th>
-                        <th className="py-3 px-4 text-left font-semibold">Payroll Period</th>
+                        <th className="py-3 px-2 text-left font-semibold w-28">Department</th>
+                        <th className="py-3 px-2 text-left font-semibold w-20">Week ID</th>
+                        <th className="py-3 px-2 text-left font-semibold">Payroll Period</th>
                         <th
-                          className="py-3 px-4 text-left font-semibold cursor-pointer"
+                          className="py-3 px-2 text-left font-semibold cursor-pointer w-24"
                           onClick={() => toggleSort("gross_pay")}
                         >
                           <div className="flex items-center">
@@ -1240,7 +1323,7 @@ const PayrollIndex = ({
                           </div>
                         </th>
                         <th
-                          className="py-3 px-4 text-left font-semibold cursor-pointer"
+                          className="py-3 px-2 text-left font-semibold cursor-pointer w-24"
                           onClick={() => toggleSort("total_deductions")}
                         >
                           <div className="flex items-center">
@@ -1251,7 +1334,7 @@ const PayrollIndex = ({
                           </div>
                         </th>
                         <th
-                          className="py-3 px-4 text-left font-semibold cursor-pointer"
+                          className="py-3 px-2 text-left font-semibold cursor-pointer w-24"
                           onClick={() => toggleSort("net_pay")}
                         >
                           <div className="flex items-center">
@@ -1261,8 +1344,8 @@ const PayrollIndex = ({
                             )}
                           </div>
                         </th>
-                        <th className="py-3 px-4 text-left font-semibold">Status</th>
-                        <th className="py-3 px-4 text-left font-semibold">Actions</th>
+                        <th className="py-3 px-2 text-left font-semibold w-24">Status</th>
+                        <th className="py-3 px-2 text-left font-semibold w-32">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1272,29 +1355,30 @@ const PayrollIndex = ({
                             key={payroll.id}
                             className="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/50"
                           >
-                            <td className="py-3 px-4 font-medium">#{payroll.id}</td>
-                            <td className="py-3 px-4">{payroll.employee_number}</td>
-                            <td className="py-3 px-4">{payroll.full_name}</td>
-                            <td className="py-3 px-4">{payroll.week_id}</td>
-                            <td className="py-3 px-4">
+                            <td className="py-3 px-2 font-medium">#{payroll.id}</td>
+                            <td className="py-3 px-2">{payroll.employee_number}</td>
+                            <td className="py-3 px-2">{payroll.full_name}</td>
+                            <td className="py-3 px-2">{payroll.department_name || ""}</td>
+                            <td className="py-3 px-2">{payroll.week_id}</td>
+                            <td className="py-3 px-2">
                               {getPayrollPeriodName(payroll.week_id)
                                 .replace(/^[0-9]+ $$/, "")
                                 .replace(/$$$/, "")}
                             </td>
-                            <td className="py-3 px-4">{formatCurrency(payroll.gross_pay)}</td>
-                            <td className="py-3 px-4">{formatCurrency(payroll.total_deductions)}</td>
-                            <td className="py-3 px-4">{formatCurrency(payroll.net_pay)}</td>
-                            <td className="py-3 px-4">
+                            <td className="py-3 px-2">{formatCurrency(payroll.gross_pay)}</td>
+                            <td className="py-3 px-2">{formatCurrency(payroll.total_deductions)}</td>
+                            <td className="py-3 px-2">{formatCurrency(payroll.net_pay)}</td>
+                            <td className="py-3 px-2">
                               <Badge className={getStatusBadgeColor(payroll.status)}>{payroll.status}</Badge>
                             </td>
-                            <td className="py-3 px-4 space-x-1">
+                            <td className="py-3 px-2 flex space-x-1">
                               <TooltipProvider>
                                 <Tooltip>
                                   <TooltipTrigger asChild>
                                     <Button
                                       variant="outline"
                                       size="sm"
-                                      className="border-slate-200 text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:text-slate-400 dark:hover:border-slate-600"
+                                      className="h-7 px-2 border-slate-200 text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:text-slate-400 dark:hover:border-slate-600"
                                       onClick={() => openUpdateModal(payroll)}
                                     >
                                       Edit
@@ -1307,16 +1391,32 @@ const PayrollIndex = ({
                               <TooltipProvider>
                                 <Tooltip>
                                   <TooltipTrigger asChild>
-                                    <Button
-                                      variant="outline"
-                                      size="icon"
-                                      className="h-8 w-8 border-blue-200 text-blue-600 hover:border-blue-300 dark:border-blue-800 dark:text-blue-400 dark:hover:border-blue-700"
-                                      onClick={() => printPayroll(payroll)}
-                                    >
-                                      <Printer className="h-3.5 w-3.5" />
-                                    </Button>
+                                    <div className="relative">
+                                      <Button
+                                        variant="outline"
+                                        size="icon"
+                                        className="h-7 w-7 border-blue-200 text-blue-600 hover:border-blue-300 dark:border-blue-800 dark:text-blue-400 dark:hover:border-blue-700"
+                                        onClick={() => printPayroll(payroll)}
+                                      >
+                                        <Printer className="h-3.5 w-3.5" />
+                                      </Button>
+                                      <Button
+                                        variant="outline"
+                                        size="icon"
+                                        className="absolute -right-3 -bottom-3 h-5 w-5 rounded-full border-blue-200 text-blue-600 hover:border-blue-300 dark:border-blue-800 dark:text-blue-400 dark:hover:border-blue-700"
+                                        onClick={() => printPayroll(payroll, true)}
+                                        title="Regenerate Payslip"
+                                      >
+                                        <RefreshCw className="h-2.5 w-2.5" />
+                                      </Button>
+                                    </div>
                                   </TooltipTrigger>
-                                  <TooltipContent>Print Payslip</TooltipContent>
+                                  <TooltipContent>
+                                    <div className="text-xs">
+                                      Print Payslip
+                                      <div className="text-gray-500">(Click refresh icon to regenerate)</div>
+                                    </div>
+                                  </TooltipContent>
                                 </Tooltip>
                               </TooltipProvider>
 
@@ -1326,7 +1426,7 @@ const PayrollIndex = ({
                                     <Button
                                       variant="outline"
                                       size="icon"
-                                      className="h-8 w-8 border-green-200 text-green-600 hover:border-green-300 dark:border-green-800 dark:text-green-400 dark:hover:border-green-700"
+                                      className="h-7 w-7 border-green-200 text-green-600 hover:border-green-300 dark:border-green-800 dark:text-green-400 dark:hover:border-green-700"
                                       onClick={() => sendEmail(payroll)}
                                     >
                                       <Mail className="h-3.5 w-3.5" />
@@ -1342,7 +1442,7 @@ const PayrollIndex = ({
                                     <Button
                                       variant="outline"
                                       size="icon"
-                                      className="h-8 w-8 border-red-200 text-red-600 hover:border-red-300 dark:border-red-800 dark:text-red-400 dark:hover:border-red-700"
+                                      className="h-7 w-7 border-red-200 text-red-600 hover:border-red-300 dark:border-red-800 dark:text-red-400 dark:hover:border-red-700"
                                       onClick={() => handleDeletePayroll(payroll.id)}
                                     >
                                       <svg
@@ -1369,7 +1469,7 @@ const PayrollIndex = ({
                         ))
                       ) : (
                         <tr>
-                          <td colSpan={10} className="py-8 text-center text-slate-500 dark:text-slate-400">
+                          <td colSpan={11} className="py-8 text-center text-slate-500 dark:text-slate-400">
                             No payroll records found matching your filters.
                           </td>
                         </tr>
@@ -1445,7 +1545,12 @@ const PayrollIndex = ({
 
         {/* Modals */}
         {isAddModalOpen && (
-          <AddPayrollModal onClose={closeAddModal} employees={employees} payrollPeriods={payrollPeriods} />
+          <AddPayrollModal
+            onClose={closeAddModal}
+            employees={employees}
+            payrollPeriods={payrollPeriods}
+            attendances={attendances}
+          />
         )}
         {isUpdateModalOpen && selectedPayroll && (
           <UpdatePayrollModal
@@ -1453,6 +1558,7 @@ const PayrollIndex = ({
             onClose={closeUpdateModal}
             employees={employees}
             payrollPeriods={payrollPeriods}
+            attendances={attendances}
           />
         )}
         {isPrintModalOpen && selectedPayroll && (

@@ -46,19 +46,20 @@ Route::middleware(['auth', 'verified'])->group(function () {
         // Basic CRUD routes
         Route::get('/', [PayrollController::class, 'index'])->name('payroll.index');
         Route::post('/', [PayrollController::class, 'store'])->name('payroll.store');
-        Route::post('/entries', [PayrollController::class, 'store'])->name('payroll.store');
         Route::get('/{id}', [PayrollController::class, 'show'])->name('payroll.show');
         Route::put('/{id}', [PayrollController::class, 'update'])->name('payroll.update');
         Route::delete('/{id}', [PayrollController::class, 'destroy'])->name('payroll.destroy');
         
-        // Make sure this route accepts POST requests
+        // Payroll entries and generation
+        Route::post('/entries', [PayrollController::class, 'store'])->name('payroll.entries.store');
         Route::post('/generate', [PayrollController::class, 'generatePayroll'])->name('payroll.generate');
+        Route::post('/generate-from-attendance', [PayrollController::class, 'generateFromAttendance'])->name('payroll.generate-from-attendance');
     
         // Payroll Periods
-        Route::post('/periods', [PayrollController::class, 'createPeriod'])->name('payroll.period.create');
-        Route::get('/periods', [PayrollController::class, 'listPeriods'])->name('payroll.period.list');
-        Route::put('/periods/{id}', [PayrollController::class, 'updatePeriod'])->name('payroll.period.update');
-        Route::delete('/periods/{id}', [PayrollController::class, 'destroyPeriod'])->name('payroll.period.destroy');
+        Route::post('/periods', [PayrollController::class, 'createPeriod'])->name('payroll.periods.create');
+        Route::get('/periods', [PayrollController::class, 'listPeriods'])->name('payroll.periods.list');
+        Route::put('/periods/{id}', [PayrollController::class, 'updatePeriod'])->name('payroll.periods.update');
+        Route::delete('/periods/{id}', [PayrollController::class, 'destroyPeriod'])->name('payroll.periods.destroy');
         
         // Payroll Automation
         Route::prefix('automation')->group(function () {
@@ -66,10 +67,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::post('/generate', [PayrollAutomationController::class, 'generatePayrolls'])->name('payroll.automation.generate');
             Route::post('/send-emails', [PayrollAutomationController::class, 'sendPayslipEmails'])->name('payroll.automation.send-emails');
         });
-        
 
-        // Payroll generation and printing
-        Route::post('/generate-from-attendance', [PayrollController::class, 'generateFromAttendance'])->name('payroll.generate-from-attendance');
+        // Payroll printing
         Route::get('/{id}/print', [PayrollController::class, 'printPayslip'])->name('payroll.print');
         Route::post('/{id}/print', [PayrollController::class, 'printPayslip'])->name('payroll.print.post');
     });
@@ -90,6 +89,11 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::post('/bulk', [AttendanceController::class, 'bulkStore'])->name('attendance.bulk.store');
         Route::post('/bulk-upload', [AttendanceController::class, 'bulkUpload'])->name('attendance.bulk.upload');
         Route::get('/export', [AttendanceController::class, 'export'])->name('attendance.export');
+        
+        // Checking and deletion
+        Route::get('/check-existing', [AttendanceController::class, 'checkExisting'])->name('attendance.check-existing');
+        Route::get('/check-bulk-existing', [AttendanceController::class, 'checkBulkExisting'])->name('attendance.check-bulk-existing');
+        Route::post('/bulk-delete', [AttendanceController::class, 'bulkDelete'])->name('attendance.bulk-delete');
     });
 
     // Additional utility routes

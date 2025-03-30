@@ -236,26 +236,50 @@ const PayrollPeriodsTab = ({ periods = [], onPeriodSelect, onTabChange }: Payrol
   // Handle generate payroll
   const handleGeneratePayroll = (weekId: number) => {
     setIsLoading(true)
-    console.log("Generating payroll for week ID:", weekId)
+    console.log("Starting payroll generation for week ID:", weekId)
+
+    // Add debug logging
+    console.log("Sending request to /payroll/generate with data:", { week_id: weekId })
 
     router.post(
       "/payroll/generate",
       { week_id: weekId },
       {
-        onSuccess: () => {
+        onSuccess: (page) => {
+          console.log("Payroll generation successful:", page)
           toast.success("Payroll generated successfully for this period!")
           setIsLoading(false)
-          router.reload() // Use reload instead of custom refreshData
+
+          // Redirect to the payroll entries tab to show the generated entries
+          onPeriodSelect(weekId)
+          onTabChange("entries")
+
+          // Reload the page to ensure fresh data
+          setTimeout(() => {
+            console.log("Reloading page after successful payroll generation")
+            router.reload()
+          }, 500)
         },
         onError: (errors) => {
           console.error("Generate payroll error:", errors)
-          if (typeof errors === "object") {
-            Object.entries(errors).forEach(([field, message]) => {
-              toast.error(`${field}: ${message}`)
-            })
+          console.error("Error details:", JSON.stringify(errors))
+
+          // Improved error handling
+          if (errors && typeof errors === "object") {
+            if (errors.message) {
+              toast.error(`Error: ${errors.message}`)
+              console.error("Error message:", errors.message)
+            } else {
+              Object.entries(errors).forEach(([field, message]) => {
+                toast.error(`${field}: ${message}`)
+                console.error(`Error field ${field}:`, message)
+              })
+            }
           } else {
-            toast.error("Failed to generate payroll")
+            toast.error("Failed to generate payroll. Please try again.")
+            console.error("Unstructured error:", errors)
           }
+
           setIsLoading(false)
         },
       },
@@ -265,7 +289,10 @@ const PayrollPeriodsTab = ({ periods = [], onPeriodSelect, onTabChange }: Payrol
   // Refresh data
   const refreshData = () => {
     setIsRefreshing(true)
-    router.reload({
+
+    // Use visit instead of reload for better control
+    router.visit("/payroll", {
+      preserveScroll: true,
       onSuccess: () => {
         setIsRefreshing(false)
         toast.success("Data refreshed successfully")
@@ -360,7 +387,7 @@ const PayrollPeriodsTab = ({ periods = [], onPeriodSelect, onTabChange }: Payrol
               <TooltipContent>Refresh Data</TooltipContent>
             </Tooltip>
           </TooltipProvider>
-          <Button onClick={() => setIsNewPeriodModalOpen(true)} className="bg-indigo-600 text-white">
+          <Button onClick={() => setIsNewPeriodModalOpen(true)} className="bg-indigo-600 text-white hover:bg-indigo-800 text:white dark:text-black">
             <Plus className="h-4 w-4 mr-2" />
             New Period
           </Button>
@@ -744,4 +771,3 @@ const PayrollPeriodsTab = ({ periods = [], onPeriodSelect, onTabChange }: Payrol
 }
 
 export default PayrollPeriodsTab
-

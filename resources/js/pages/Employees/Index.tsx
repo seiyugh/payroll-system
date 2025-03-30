@@ -31,6 +31,7 @@ import { Progress } from "@/components/ui/progress"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 
+
 // Import the export utility
 import { exportToCSV } from "@/utils/export-utils"
 
@@ -290,7 +291,7 @@ const EmployeesIndex = ({
 
     setIsLoading(true)
     router.get(
-      route("employees.index"),
+      (window as any).route("employees.index"),
       {
         page: 1,
         perPage: paginationData.per_page,
@@ -327,7 +328,7 @@ const EmployeesIndex = ({
     setSortDirection(newDirection)
 
     router.get(
-      route("employees.index"),
+      (window as any).route("employees.index"),
       {
         page: paginationData.current_page,
         perPage: paginationData.per_page,
@@ -351,7 +352,7 @@ const EmployeesIndex = ({
     setIsLoading(true)
 
     router.get(
-      route("employees.index"),
+      (window as any).route("employees.index"),
       {
         page,
         perPage: paginationData.per_page,
@@ -376,7 +377,7 @@ const EmployeesIndex = ({
     setIsLoading(true)
 
     router.get(
-      route("employees.index"),
+    (window).route("employees.index"),
       {
         page: 1,
         perPage: newPerPage,
@@ -636,22 +637,7 @@ const EmployeesIndex = ({
           </div>
         </div>
 
-        {/* Debug Info Alert - Only show if no employee records */}
-        {employeeData.length === 0 && (
-          <Alert className="mb-6 bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-400">
-            <Info className="h-4 w-4" />
-            <AlertTitle>No employee records found</AlertTitle>
-            <AlertDescription className="mt-2">
-              <p className="mb-2">There are no employee records in the system. You can:</p>
-              <ul className="list-disc pl-5 space-y-1">
-                <li>Add records manually using the "Add Employee" button</li>
-                <li>Import records using the "Bulk Add" button</li>
-              </ul>
-              <p className="mt-2 text-xs">{debugInfo}</p>
-            </AlertDescription>
-          </Alert>
-        )}
-
+    
         {/* Onboarding Progress */}
         <Card className="p-5 border border-slate-200 dark:border-slate-700 mb-6">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between">

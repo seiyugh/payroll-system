@@ -10,7 +10,10 @@ import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Calendar, Upload, Users } from "lucide-react"
+import { Calendar, Upload, Users, AlertCircle } from "lucide-react"
+import { toast } from "sonner"
+import { router } from "@inertiajs/react"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 
 interface Employee {
   id: number
@@ -38,6 +41,9 @@ const BulkAddAttendanceModal = ({
   const [selectedEmployees, setSelectedEmployees] = useState<string[]>([])
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [selectAll, setSelectAll] = useState(false)
+  const [errors, setErrors] = useState({
+    duplicate: "",
+  })
 
   // Handle file selection
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -54,27 +60,93 @@ const BulkAddAttendanceModal = ({
       onSubmitFile(file)
     } catch (error) {
       console.error("Error uploading file:", error)
-    } finally {
+      toast.error("Error uploading file. Please try again.")
       setIsSubmitting(false)
     }
   }
 
   // Handle manual submission
-  const handleManualSubmit = () => {
-    if (!date || selectedEmployees.length === 0) return
+  const handleManualSubmit = async () => {
+    if (!date || selectedEmployees.length === 0) {
+      toast.error("Please select a date and at least one employee")
+      return
+    }
+
     setIsSubmitting(true)
+    setErrors({ duplicate: "" })
+
     try {
-      onSubmitManual(date, selectedEmployees, status)
+      // Check for existing records first
+      const checkResponse = await fetch(
+        `/api/attendance/check-bulk-existing?employee_numbers=${selectedEmployees.join(",")}&work_date=${date}`,
+      )
+      const checkData = await checkResponse.json()
+
+      if (checkData.existingEmployees && checkData.existingEmployees.length > 0) {
+        // Some employees already have records for this date
+        if (checkData.existingEmployees.length === selectedEmployees.length) {
+          const errorMsg = `All selected employees already have attendance records for ${date}`
+          toast.error(errorMsg)
+          setErrors({ duplicate: errorMsg })
+          setIsSubmitting(false)
+          return
+        }
+
+        // Filter out employees that already have records
+        const filteredEmployees = selectedEmployees.filter((empNum) => !checkData.existingEmployees.includes(empNum))
+
+        // Ask user if they want to continue with remaining employees
+        if (
+          confirm(
+            `${checkData.existingEmployees.length} employees already have attendance records for ${date}. Do you want to continue with the remaining ${filteredEmployees.length} employees?`,
+          )
+        ) {
+          onSubmitManual(date, filteredEmployees, status)
+        } else {
+          setIsSubmitting(false)
+        }
+      } else {
+        // No existing records, proceed normally
+        onSubmitManual(date, selectedEmployees, status)
+      }
     } catch (error) {
-      console.error("Error adding bulk attendance:", error)
-    } finally {
-      setIsSubmitting(false)
+      console.error("Error checking existing records:", error)
+
+      // If the check fails, try direct submission but handle duplicate errors
+      router.post(
+        "/attendance/bulk",
+        { work_date: date, employee_numbers: selectedEmployees, status },
+        {
+          preserveScroll: true,
+          onSuccess: () => {
+            toast.success("Attendance records added successfully!")
+            onClose()
+          },
+          onError: (errors) => {
+            console.error("Bulk add errors:", errors)
+            if (typeof errors === "object") {
+              if (errors.duplicate) {
+                toast.error(errors.duplicate)
+                setErrors({ duplicate: errors.duplicate })
+              } else {
+                Object.values(errors).forEach((message) => {
+                  toast.error(`Error: ${message}`)
+                })
+              }
+            } else {
+              toast.error("Failed to add attendance records")
+            }
+            setIsSubmitting(false)
+          },
+        },
+      )
     }
   }
 
   // Set today's date
   const setToday = () => {
     setDate(new Date().toISOString().split("T")[0])
+    setErrors({ duplicate: "" })
   }
 
   // Toggle employee selection
@@ -159,7 +231,10 @@ const BulkAddAttendanceModal = ({
                 id="manual-date"
                 type="date"
                 value={date}
-                onChange={(e) => setDate(e.target.value)}
+                onChange={(e) => {
+                  setDate(e.target.value)
+                  setErrors({ duplicate: "" })
+                }}
                 className="w-full"
                 required
               />
@@ -210,6 +285,13 @@ const BulkAddAttendanceModal = ({
                 Selected: {selectedEmployees.length} employees
               </p>
             </div>
+
+            {errors.duplicate && (
+              <Alert variant="destructive" className="mt-2">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>{errors.duplicate}</AlertDescription>
+              </Alert>
+            )}
 
             <div className="flex justify-end space-x-2 pt-4">
               <Button variant="outline" onClick={onClose} type="button">

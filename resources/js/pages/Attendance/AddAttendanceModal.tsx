@@ -37,6 +37,7 @@ const AddAttendanceModal = ({ onClose, onSubmit, employees }: AddAttendanceModal
     work_date: "",
     status: "",
     daily_rate: "",
+    duplicate: "",
   })
 
   const handleChange = (e) => {
@@ -57,7 +58,6 @@ const AddAttendanceModal = ({ onClose, onSubmit, employees }: AddAttendanceModal
 
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null)
-
 
   // Handle employee selection
   const handleEmployeeChange = (employeeNumber: string) => {
@@ -100,23 +100,6 @@ const AddAttendanceModal = ({ onClose, onSubmit, employees }: AddAttendanceModal
         return "bg-pink-50 text-pink-700 border-pink-200 dark:bg-pink-900/20 dark:text-pink-400 dark:border-pink-800"
       default:
         return "bg-slate-50 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700"
-    }
-  }
-
-  // Function to check if an attendance record already exists
-  const checkExistingAttendance = async (employeeNumber, workDate) => {
-    try {
-      // This is where you would make an API call to check if a record exists
-      // For example:
-      // const response = await fetch(`/api/attendance/check?employee=${employeeNumber}&date=${workDate}`);
-      // const data = await response.json();
-      // return data.exists;
-
-      // For now, we'll return false as a placeholder
-      return false
-    } catch (error) {
-      console.error("Error checking existing attendance:", error)
-      return false
     }
   }
 
@@ -165,76 +148,80 @@ const AddAttendanceModal = ({ onClose, onSubmit, employees }: AddAttendanceModal
     const selectedEmployee = employees.find((e) => e.employee_number === formData.employee_number)
     const employeeName = selectedEmployee?.full_name || "this employee"
 
+    // First check if a record already exists for this employee and date
     try {
-      // Check if a record already exists for this employee and date using Inertia
-      router.get(
-        `/attendance/check-existing?employee_number=${formData.employee_number}&work_date=${formData.work_date}`,
-        {
-          preserveState: true,
-          only: ["exists"],
-          onSuccess: (page) => {
-            if (page.props.exists) {
-              toast.error(`An attendance record already exists for ${employeeName} on ${formData.work_date}`)
-              setIsSubmitting(false)
-            } else {
-              // If no existing record, proceed with submission
-              router.post("/attendance", formattedData, {
-                preserveScroll: true,
-                onSuccess: () => {
-                  toast.success(`Attendance record added for ${employeeName}`)
-                  onClose()
-                },
-                onError: (errors) => {
-                  console.error("Submission error:", errors)
+      // Check if a record already exists
+      const checkResponse = await fetch(
+        `/api/attendance/check-existing?employee_number=${formData.employee_number}&work_date=${formData.work_date}`,
+      )
+      const checkData = await checkResponse.json()
 
-                  // Check for duplicate entry error in the response
-                  if (typeof errors === "object") {
-                    Object.entries(errors).forEach(([field, message]) => {
-                      if (typeof message === "string" && message.toLowerCase().includes("duplicate")) {
-                        toast.error(`An attendance record already exists for ${employeeName} on ${formData.work_date}`)
-                      } else {
-                        toast.error(`${field}: ${message}`)
-                      }
-                    })
-                  } else {
-                    toast.error("Failed to add attendance record")
-                  }
-                  setIsSubmitting(false)
-                },
+      if (checkData.exists) {
+        toast.error(`An attendance record already exists for ${employeeName} on ${formData.work_date}`)
+        setIsSubmitting(false)
+        return
+      }
+
+      // If no existing record, proceed with submission
+      router.post("/attendance", formattedData, {
+        preserveScroll: true,
+        onSuccess: () => {
+          toast.success(`Attendance record added for ${employeeName}`)
+          onClose()
+        },
+        onError: (errors) => {
+          console.error("Submission error:", errors)
+
+          // Check for duplicate entry error in the response
+          if (typeof errors === "object") {
+            if (errors.duplicate) {
+              toast.error(errors.duplicate)
+            } else {
+              Object.entries(errors).forEach(([field, message]) => {
+                if (typeof message === "string" && message.toLowerCase().includes("duplicate")) {
+                  toast.error(`An attendance record already exists for ${employeeName} on ${formData.work_date}`)
+                } else {
+                  toast.error(`${field}: ${message}`)
+                }
               })
             }
-          },
-          onError: () => {
-            // If check fails, try to submit anyway
-            router.post("/attendance", formattedData, {
-              preserveScroll: true,
-              onSuccess: () => {
-                toast.success(`Attendance record added for ${employeeName}`)
-                onClose()
-              },
-              onError: (errors) => {
-                // Handle duplicate entry errors
-                if (typeof errors === "object") {
-                  Object.entries(errors).forEach(([field, message]) => {
-                    if (typeof message === "string" && message.toLowerCase().includes("duplicate")) {
-                      toast.error(`An attendance record already exists for ${employeeName} on ${formData.work_date}`)
-                    } else {
-                      toast.error(`${field}: ${message}`)
-                    }
-                  })
-                } else {
-                  toast.error("Failed to add attendance record")
-                }
-                setIsSubmitting(false)
-              },
-            })
-          },
+          } else {
+            toast.error("Failed to add attendance record")
+          }
+          setIsSubmitting(false)
         },
-      )
+      })
     } catch (error) {
       console.error("Error in submission process:", error)
-      toast.error("An unexpected error occurred. Please try again.")
-      setIsSubmitting(false)
+
+      // If the API check fails, try direct submission but handle duplicate errors
+      router.post("/attendance", formattedData, {
+        preserveScroll: true,
+        onSuccess: () => {
+          toast.success(`Attendance record added for ${employeeName}`)
+          onClose()
+        },
+        onError: (errors) => {
+          console.error("Submission error:", errors)
+
+          if (typeof errors === "object") {
+            if (errors.duplicate) {
+              toast.error(errors.duplicate)
+            } else {
+              Object.entries(errors).forEach(([field, message]) => {
+                if (typeof message === "string" && message.toLowerCase().includes("duplicate")) {
+                  toast.error(`An attendance record already exists for ${employeeName} on ${formData.work_date}`)
+                } else {
+                  toast.error(`${field}: ${message}`)
+                }
+              })
+            }
+          } else {
+            toast.error("Failed to add attendance record")
+          }
+          setIsSubmitting(false)
+        },
+      })
     }
   }
 
@@ -363,6 +350,7 @@ const AddAttendanceModal = ({ onClose, onSubmit, employees }: AddAttendanceModal
             </div>
 
             {errors.status && <p className="text-sm text-red-500">{errors.status}</p>}
+            {errors.duplicate && <p className="text-sm text-red-500">{errors.duplicate}</p>}
           </div>
 
           <div className="space-y-2">

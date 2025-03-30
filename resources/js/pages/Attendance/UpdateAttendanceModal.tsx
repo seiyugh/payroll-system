@@ -52,7 +52,9 @@ const UpdateAttendanceModal = ({ attendance, onClose, onSubmit, employees = [] }
 
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [quickSelect, setQuickSelect] = useState<string | null>(attendance.status)
-
+  const [errors, setErrors] = useState({
+    duplicate: "",
+  })
 
   const handleChange = (e) => {
     const { name, value } = e.target
@@ -60,6 +62,11 @@ const UpdateAttendanceModal = ({ attendance, onClose, onSubmit, employees = [] }
       ...prev,
       [name]: value,
     }))
+
+    // Clear errors when changing date
+    if (name === "work_date") {
+      setErrors({ duplicate: "" })
+    }
   }
 
   // Set today's date
@@ -68,6 +75,7 @@ const UpdateAttendanceModal = ({ attendance, onClose, onSubmit, employees = [] }
       ...prev,
       work_date: new Date().toISOString().split("T")[0],
     }))
+    setErrors({ duplicate: "" })
   }
 
   // Handle quick select for status
@@ -79,9 +87,8 @@ const UpdateAttendanceModal = ({ attendance, onClose, onSubmit, employees = [] }
     }))
   }
 
-  // Replace the handleSubmit function with this implementation:
-
-  const handleSubmit = (e) => {
+  // Replace the handleSubmit function with this improved version:
+  const handleSubmit = async (e) => {
     e.preventDefault()
 
     // Make sure we're using the correct field structure and all numeric values are properly parsed
@@ -103,27 +110,28 @@ const UpdateAttendanceModal = ({ attendance, onClose, onSubmit, employees = [] }
 
     // Check if we're changing the date to a date that might already exist for this employee
     if (formData.work_date !== attendance.work_date) {
-      // This is a date change, so we should check if there's already an attendance record for this date
-      router.get(
-        `/attendance/check-existing?employee_number=${formData.employee_number}&work_date=${formData.work_date}&exclude_id=${formData.id}`,
-        {
-          preserveState: true,
-          only: ["exists"],
-          onSuccess: (page) => {
-            if (page.props.exists) {
-              toast.error(`An attendance record already exists for this employee on ${formData.work_date}`)
-              setIsSubmitting(false)
-            } else {
-              // Proceed with the update
-              proceedWithUpdate(formattedData)
-            }
-          },
-          onError: () => {
-            // If check fails, try to update anyway
-            proceedWithUpdate(formattedData)
-          },
-        },
-      )
+      try {
+        // Check if a record already exists
+        const checkResponse = await fetch(
+          `/api/attendance/check-existing?employee_number=${formData.employee_number}&work_date=${formData.work_date}&exclude_id=${formData.id}`,
+        )
+        const checkData = await checkResponse.json()
+
+        if (checkData.exists) {
+          toast.error(`An attendance record already exists for this employee on ${formData.work_date}`)
+          setErrors({ duplicate: `An attendance record already exists for this employee on ${formData.work_date}` })
+          setIsSubmitting(false)
+          return
+        }
+
+        // If no existing record, proceed with the update
+        proceedWithUpdate(formattedData)
+      } catch (error) {
+        console.error("Error checking existing record:", error)
+
+        // If the check fails, try direct update but handle duplicate errors
+        proceedWithUpdate(formattedData)
+      }
     } else {
       // No date change, proceed with update
       proceedWithUpdate(formattedData)
@@ -143,13 +151,20 @@ const UpdateAttendanceModal = ({ attendance, onClose, onSubmit, employees = [] }
 
         // Check for duplicate entry error in the response
         if (typeof errors === "object") {
-          Object.entries(errors).forEach(([field, message]) => {
-            if (typeof message === "string" && message.toLowerCase().includes("duplicate")) {
-              toast.error(`An attendance record already exists for this employee on ${formattedData.work_date}`)
-            } else {
-              toast.error(`${field}: ${message}`)
-            }
-          })
+          if (errors.duplicate) {
+            toast.error(errors.duplicate)
+            setErrors({ duplicate: errors.duplicate })
+          } else {
+            Object.entries(errors).forEach(([field, message]) => {
+              if (typeof message === "string" && message.toLowerCase().includes("duplicate")) {
+                const errorMsg = `An attendance record already exists for this employee on ${formattedData.work_date}`
+                toast.error(errorMsg)
+                setErrors({ duplicate: errorMsg })
+              } else {
+                toast.error(`${field}: ${message}`)
+              }
+            })
+          }
         } else {
           toast.error("Failed to update attendance record")
         }
@@ -214,6 +229,7 @@ const UpdateAttendanceModal = ({ attendance, onClose, onSubmit, employees = [] }
               className="w-full"
               required
             />
+            {errors.duplicate && <p className="text-sm text-red-500">{errors.duplicate}</p>}
           </div>
 
           <div className="space-y-2">

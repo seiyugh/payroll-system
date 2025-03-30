@@ -12,7 +12,7 @@ class PayrollEntry extends Model
 
     protected $fillable = [
         'employee_number',
-        'week_id', // Changed from payroll_period_id to week_id
+        'week_id',
         'gross_pay',
         'sss_deduction',
         'philhealth_deduction',
@@ -27,8 +27,12 @@ class PayrollEntry extends Model
         'ytd_earnings',
         'thirteenth_month_pay',
         'status',
-        'daily_rate', // Changed from daily_rates to match migration
-        'short',      // Add this field if it's used
+        'daily_rate',
+        'daily_rates', // For storing daily rate information
+        'basic_salary',
+        'short',
+        'created_at',
+        'updated_at',
     ];
 
     protected $casts = [
@@ -45,8 +49,9 @@ class PayrollEntry extends Model
         'net_pay' => 'decimal:2',
         'ytd_earnings' => 'decimal:2',
         'thirteenth_month_pay' => 'decimal:2',
-        'daily_rate' => 'decimal:2', // Changed from daily_rates
+        'daily_rate' => 'decimal:2',
         'short' => 'decimal:2',
+        'daily_rates' => 'array',
     ];
 
     /**
@@ -83,4 +88,3 @@ class PayrollEntry extends Model
         return $this->employee ? $this->employee->full_name : '';
     }
 }
-

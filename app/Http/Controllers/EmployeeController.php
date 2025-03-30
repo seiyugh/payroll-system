@@ -130,10 +130,26 @@ class EmployeeController extends Controller
         ]);
     }
 
-    public function update(Request $request, Employee $employee)
+    public function update(Request $request, $id)
     {
+        // Explicitly find the employee by ID instead of relying on route model binding
+        $employee = Employee::find($id);
+        
+        if (!$employee) {
+            Log::error('Employee not found for update', ['id' => $id]);
+            return redirect()->back()->withErrors(['general' => 'Employee not found'])->withInput();
+        }
+        
+        // Log the employee being updated with both ID and employee_number
+        Log::info('Updating employee', [
+            'id' => $employee->id,
+            'employee_number' => $employee->employee_number,
+            'request_employee_number' => $request->employee_number
+        ]);
+        
+        // The validation rules
         $validator = Validator::make($request->all(), [
-            'employee_number' => 'required|unique:employees,employee_number,' . $employee->employee_number . ',employee_number',
+            'employee_number' => 'required',
             'full_name' => 'required',
             'last_name' => 'required',
             'first_name' => 'required',
@@ -152,15 +168,62 @@ class EmployeeController extends Controller
             'emergency_contact_name' => 'required',
             'emergency_contact_mobile' => 'required',
         ]);
-    
+
+        // Add a custom validation rule to check uniqueness only if the employee_number has changed
+        if ($request->employee_number !== $employee->employee_number) {
+            // Check if another employee (different ID) has this employee number
+            $existingEmployee = Employee::where('employee_number', $request->employee_number)
+                                       ->where('id', '!=', $employee->id)
+                                       ->first();
+            
+            if ($existingEmployee) {
+                Log::warning('Employee number already exists on a different employee', [
+                    'attempted_employee_number' => $request->employee_number,
+                    'existing_employee_id' => $existingEmployee->id,
+                    'current_employee_id' => $employee->id
+                ]);
+                
+                return redirect()->back()->withErrors([
+                    'employee_number' => 'The employee number has already been taken by another employee.'
+                ])->withInput();
+            }
+        }
+        
         if ($validator->fails()) {
+            Log::error('Validation failed when updating employee', [
+                'id' => $employee->id,
+                'employee_number' => $employee->employee_number,
+                'errors' => $validator->errors()->toArray()
+            ]);
+            
             return redirect()->back()->withErrors($validator)->withInput();
         }
-    
-        $employee->update($request->all());
-    
-        return redirect()->route('employees.index')->with('success', 'Employee updated successfully');
+        
+        try {
+            // Update the employee
+            $employee->update($request->all());
+            
+            Log::info('Employee updated successfully', [
+                'id' => $employee->id,
+                'employee_number' => $employee->employee_number
+            ]);
+            
+            return redirect()->route('employees.index')->with('success', 'Employee updated successfully');
+        } catch (\Exception $e) {
+            Log::error('Error updating employee', [
+                'id' => $employee->id,
+                'employee_number' => $employee->employee_number,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            return redirect()->back()->withErrors([
+                'general' => 'An error occurred while updating the employee: ' . $e->getMessage()
+            ])->withInput();
+        }
     }
+    
+    
     
 
     public function destroy(Employee $employee)

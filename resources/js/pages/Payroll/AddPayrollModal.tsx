@@ -42,9 +42,10 @@ interface AddPayrollModalProps {
   onClose: () => void
   employees: Employee[]
   payrollPeriods: PayrollPeriod[]
+  attendances?: any[] // Add this line
 }
 
-const AddPayrollModal = ({ isOpen = true, onClose, employees, payrollPeriods }: AddPayrollModalProps) => {
+const AddPayrollModal = ({ isOpen = true, onClose, employees, payrollPeriods, attendances }: AddPayrollModalProps) => {
   const [formData, setFormData] = useState({
     employee_number: "",
     week_id: "",
@@ -72,6 +73,9 @@ const AddPayrollModal = ({ isOpen = true, onClose, employees, payrollPeriods }: 
   const [employeeSearchTerm, setEmployeeSearchTerm] = useState("")
   const [filteredEmployees, setFilteredEmployees] = useState(employees)
   const [isAllenOne, setIsAllenOne] = useState(false)
+  const [selectedAttendances, setSelectedAttendances] = useState<any[]>([])
+  const [daysWorked, setDaysWorked] = useState(0)
+  const [isCalculatingFromAttendance, setIsCalculatingFromAttendance] = useState(true)
 
   // Calculate derived values when form data changes
   useEffect(() => {
@@ -146,7 +150,9 @@ const AddPayrollModal = ({ isOpen = true, onClose, employees, payrollPeriods }: 
       }
     }
 
-    calculatePayroll()
+    if (!isCalculatingFromAttendance) {
+      calculatePayroll()
+    }
   }, [
     formData.daily_rate,
     formData.sss_deduction,
@@ -158,6 +164,7 @@ const AddPayrollModal = ({ isOpen = true, onClose, employees, payrollPeriods }: 
     formData.vat,
     formData.other_deductions,
     formData.short,
+    isCalculatingFromAttendance,
   ])
 
   // Add this useEffect after the other useEffect hooks
@@ -172,15 +179,107 @@ const AddPayrollModal = ({ isOpen = true, onClose, employees, payrollPeriods }: 
           ...prev,
           week_id: pendingPeriod.week_id.toString(),
         }))
+
+        // Fetch attendance if employee is selected
+        if (selectedEmployee) {
+          setTimeout(fetchAttendanceRecords, 100)
+        }
       } else {
         // If no pending period, use the first one
         setFormData((prev) => ({
           ...prev,
           week_id: payrollPeriods[0].week_id.toString(),
         }))
+
+        // Fetch attendance if employee is selected
+        if (selectedEmployee) {
+          setTimeout(fetchAttendanceRecords, 100)
+        }
       }
     }
-  }, [payrollPeriods])
+  }, [payrollPeriods, selectedEmployee])
+
+  // Add this useEffect to fetch attendance when period changes
+  useEffect(() => {
+    if (selectedEmployee && formData.week_id) {
+      fetchAttendanceRecords()
+    }
+  }, [formData.week_id])
+
+  // Fetch attendance records when employee and period are selected
+  const fetchAttendanceRecords = async () => {
+    if (!selectedEmployee || !formData.week_id) return
+
+    try {
+      // Find the selected period
+      const period = payrollPeriods.find((p) => p.week_id.toString() === formData.week_id.toString())
+      if (!period) return
+
+      // Make API request to fetch attendance records
+      const response = await fetch(
+        `/api/attendance?employee_number=${selectedEmployee.employee_number}&start_date=${period.period_start}&end_date=${period.period_end}`,
+      )
+
+      if (!response.ok) {
+        throw new Error("Failed to fetch attendance records")
+      }
+
+      const data = await response.json()
+      setSelectedAttendances(data.attendances || [])
+
+      // Calculate days worked
+      const workDays = data.attendances.filter(
+        (record) => record.status.toLowerCase() === "present" || record.status.toLowerCase() === "half day",
+      ).length
+
+      setDaysWorked(workDays)
+
+      // Calculate gross pay based on attendance
+      calculateGrossPayFromAttendance(data.attendances)
+    } catch (error) {
+      console.error("Error fetching attendance records:", error)
+      toast.error("Failed to fetch attendance records")
+    }
+  }
+
+  // Calculate gross pay based on attendance records
+  const calculateGrossPayFromAttendance = (attendanceRecords) => {
+    if (!selectedEmployee || !attendanceRecords.length) return
+
+    const dailyRate = Number.parseFloat(selectedEmployee.daily_rate) || 0
+    let grossPay = 0
+
+    attendanceRecords.forEach((record) => {
+      const status = record.status.toLowerCase()
+      const recordDailyRate = Number.parseFloat(record.daily_rate) || dailyRate
+      const adjustment = Number.parseFloat(record.adjustment) || 0
+
+      // Calculate pay based on status
+      let amount = 0
+      switch (status) {
+        case "present":
+          amount = recordDailyRate
+          break
+        case "half day":
+          amount = recordDailyRate / 2
+          break
+        case "absent":
+        case "day off":
+          amount = 0
+          break
+        default:
+          amount = recordDailyRate
+          break
+      }
+
+      grossPay += amount + adjustment
+    })
+
+    setFormData((prev) => ({
+      ...prev,
+      gross_pay: grossPay.toFixed(2),
+    }))
+  }
 
   // Handle employee selection
   const handleEmployeeChange = (value: string) => {
@@ -199,6 +298,11 @@ const AddPayrollModal = ({ isOpen = true, onClose, employees, payrollPeriods }: 
     }))
 
     setSelectedEmployee(employee || null)
+
+    // Fetch attendance records if period is selected
+    if (employee && formData.week_id) {
+      fetchAttendanceRecords()
+    }
   }
 
   // Handle form input changes
@@ -295,132 +399,66 @@ const AddPayrollModal = ({ isOpen = true, onClose, employees, payrollPeriods }: 
   const calculateStandardDeductionsHelper = (grossPay: number) => {
     // Parse the gross pay to ensure it's a number
     const gross = Number.parseFloat(grossPay.toString()) || 0
+    const monthlyRate = gross * 4 // Approximate monthly rate based on weekly gross
 
-    // Calculate SSS (Social Security System) contribution
-    // This is a simplified calculation - adjust according to actual SSS table
+    // Calculate SSS (Social Security System) contribution for 2025
+    // 5% employee contribution based on Monthly Salary Credit (MSC)
     let sss = 0
-    if (gross <= 3250) {
-      sss = 135
-    } else if (gross <= 3750) {
-      sss = 157.5
-    } else if (gross <= 4250) {
-      sss = 180
-    } else if (gross <= 4750) {
-      sss = 202.5
-    } else if (gross <= 5250) {
-      sss = 225
-    } else if (gross <= 5750) {
-      sss = 247.5
-    } else if (gross <= 6250) {
-      sss = 270
-    } else if (gross <= 6750) {
-      sss = 292.5
-    } else if (gross <= 7250) {
-      sss = 315
-    } else if (gross <= 7750) {
-      sss = 337.5
-    } else if (gross <= 8250) {
-      sss = 360
-    } else if (gross <= 8750) {
-      sss = 382.5
-    } else if (gross <= 9250) {
-      sss = 405
-    } else if (gross <= 9750) {
-      sss = 427.5
-    } else if (gross <= 10250) {
-      sss = 450
-    } else if (gross <= 10750) {
-      sss = 472.5
-    } else if (gross <= 11250) {
-      sss = 495
-    } else if (gross <= 11750) {
-      sss = 517.5
-    } else if (gross <= 12250) {
-      sss = 540
-    } else if (gross <= 12750) {
-      sss = 562.5
-    } else if (gross <= 13250) {
-      sss = 585
-    } else if (gross <= 13750) {
-      sss = 607.5
-    } else if (gross <= 14250) {
-      sss = 630
-    } else if (gross <= 14750) {
-      sss = 652.5
-    } else if (gross <= 15250) {
-      sss = 675
-    } else if (gross <= 15750) {
-      sss = 697.5
-    } else if (gross <= 16250) {
-      sss = 720
-    } else if (gross <= 16750) {
-      sss = 742.5
-    } else if (gross <= 17250) {
-      sss = 765
-    } else if (gross <= 17750) {
-      sss = 787.5
-    } else if (gross <= 18250) {
-      sss = 810
-    } else if (gross <= 18750) {
-      sss = 832.5
-    } else if (gross <= 19250) {
-      sss = 855
-    } else if (gross <= 19750) {
-      sss = 877.5
-    } else if (gross <= 20250) {
-      sss = 900
-    } else if (gross <= 20750) {
-      sss = 922.5
-    } else if (gross <= 21250) {
-      sss = 945
-    } else if (gross <= 21750) {
-      sss = 967.5
-    } else if (gross <= 22250) {
-      sss = 990
-    } else if (gross <= 22750) {
-      sss = 1012.5
-    } else if (gross <= 23250) {
-      sss = 1035
-    } else if (gross <= 23750) {
-      sss = 1057.5
-    } else if (gross <= 24250) {
-      sss = 1080
-    } else if (gross <= 24750) {
-      sss = 1102.5
+
+    // Determine the Monthly Salary Credit (MSC) bracket
+    // This is a simplified implementation - adjust according to the actual 2025 SSS table
+    if (monthlyRate <= 4000) {
+      sss = 4000 * 0.05 // 5% of minimum MSC
+    } else if (monthlyRate > 30000) {
+      sss = 30000 * 0.05 // 5% of maximum MSC
     } else {
-      sss = 1125
+      // Round to the nearest 500 for MSC determination
+      const msc = Math.ceil(monthlyRate / 500) * 500
+      sss = msc * 0.05
     }
 
-    // Calculate PhilHealth contribution (4% of gross pay, split between employee and employer)
-    // Employee pays 2% with a ceiling
-    const philhealth = Math.min(gross * 0.02, 900) // Maximum of 900 for 45,000 and above
+    // Calculate PhilHealth contribution for 2025 (5% of monthly basic salary)
+    // Employee pays 2.5% with floor of ₱10,000 and ceiling of ₱100,000
+    let philhealth = 0
+    if (monthlyRate < 10000) {
+      philhealth = 10000 * 0.025 // 2.5% of minimum ₱10,000
+    } else if (monthlyRate > 100000) {
+      philhealth = 100000 * 0.025 // 2.5% of maximum ₱100,000
+    } else {
+      philhealth = monthlyRate * 0.025 // 2.5% of actual monthly salary
+    }
 
-    // Calculate Pag-IBIG contribution (usually 100 for those earning below 1,500, and 2% for those above)
-    const pagibig = gross < 1500 ? 100 : Math.min(gross * 0.02, 100)
+    // Calculate Pag-IBIG contribution for 2025 (2% of monthly salary, max ₱200)
+    const pagibig = Math.min(monthlyRate * 0.02, 200)
 
-    // Calculate withholding tax (simplified)
+    // Calculate withholding tax (based on 2025 BIR tax table)
     let tax = 0
-    const taxableIncome = gross - sss - philhealth - pagibig
+    const annualRate = monthlyRate * 12 // Convert monthly to annual
+    const taxableIncome = annualRate - (sss + philhealth + pagibig) * 12 // Annual taxable income
 
-    if (taxableIncome <= 20833) {
-      tax = 0
-    } else if (taxableIncome <= 33332) {
-      tax = (taxableIncome - 20833) * 0.2
-    } else if (taxableIncome <= 66666) {
-      tax = 2500 + (taxableIncome - 33333) * 0.25
-    } else if (taxableIncome <= 166666) {
-      tax = 10833.33 + (taxableIncome - 66667) * 0.3
-    } else if (taxableIncome <= 666666) {
-      tax = 40833.33 + (taxableIncome - 166667) * 0.32
+    if (taxableIncome <= 250000) {
+      tax = 0 // Exempt
+    } else if (taxableIncome <= 400000) {
+      tax = (taxableIncome - 250000) * 0.15 // 15% of excess over 250,000
+    } else if (taxableIncome <= 800000) {
+      tax = 22500 + (taxableIncome - 400000) * 0.2 // 22,500 + 20% of excess over 400,000
+    } else if (taxableIncome <= 2000000) {
+      tax = 102500 + (taxableIncome - 800000) * 0.25 // 102,500 + 25% of excess over 800,000
+    } else if (taxableIncome <= 8000000) {
+      tax = 402500 + (taxableIncome - 2000000) * 0.3 // 402,500 + 30% of excess over 2,000,000
     } else {
-      tax = 200833.33 + (taxableIncome - 666667) * 0.35
+      tax = 2202500 + (taxableIncome - 8000000) * 0.35 // 2,202,500 + 35% of excess over 8,000,000
     }
+
+    // Convert annual tax to monthly, then to weekly
+    const monthlyTax = tax / 12
+    const weeklyTax = monthlyTax / 4
 
     return {
-      sss: sss.toFixed(2),
-      philhealth: philhealth.toFixed(2),
-      pagibig: pagibig.toFixed(2),
-      tax: tax.toFixed(2),
+      sss: (sss / 4).toFixed(2), // Convert monthly SSS to weekly
+      philhealth: (philhealth / 4).toFixed(2), // Convert monthly PhilHealth to weekly
+      pagibig: (pagibig / 4).toFixed(2), // Convert monthly Pag-IBIG to weekly
+      tax: weeklyTax.toFixed(2),
     }
   }
 
@@ -512,6 +550,32 @@ const AddPayrollModal = ({ isOpen = true, onClose, employees, payrollPeriods }: 
                 {errors.status && <p className="text-red-500 text-xs mt-1">{errors.status}</p>}
               </div>
 
+              <div className="flex items-center space-x-2">
+                <Label htmlFor="calculation-method" className="flex-grow">
+                  Calculation Method:
+                </Label>
+                <div className="flex items-center space-x-1">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={isCalculatingFromAttendance ? "default" : "outline"}
+                    onClick={() => setIsCalculatingFromAttendance(true)}
+                    className="text-xs"
+                  >
+                    Attendance
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={!isCalculatingFromAttendance ? "default" : "outline"}
+                    onClick={() => setIsCalculatingFromAttendance(false)}
+                    className="text-xs"
+                  >
+                    Manual
+                  </Button>
+                </div>
+              </div>
+
               <Card className="bg-indigo-50 dark:bg-indigo-900/20 border-indigo-100 dark:border-indigo-800">
                 <CardContent className="p-4">
                   <h3 className="font-medium text-indigo-700 dark:text-indigo-300 mb-2">Payroll Summary</h3>
@@ -531,6 +595,38 @@ const AddPayrollModal = ({ isOpen = true, onClose, employees, payrollPeriods }: 
                   </div>
                 </CardContent>
               </Card>
+
+              {selectedAttendances.length > 0 && (
+                <Card className="bg-blue-50 dark:bg-blue-900/20 border-blue-100 dark:border-blue-800">
+                  <CardContent className="p-4">
+                    <h3 className="font-medium text-blue-700 dark:text-blue-300 mb-2">Attendance Summary</h3>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <p className="text-sm text-blue-600 dark:text-blue-400">Days Present:</p>
+                        <p className="font-bold text-blue-700 dark:text-blue-300">
+                          {selectedAttendances.filter((a) => a.status.toLowerCase() === "present").length}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-blue-600 dark:text-blue-400">Half Days:</p>
+                        <p className="font-bold text-blue-700 dark:text-blue-300">
+                          {selectedAttendances.filter((a) => a.status.toLowerCase() === "half day").length}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-blue-600 dark:text-blue-400">Absences:</p>
+                        <p className="font-bold text-blue-700 dark:text-blue-300">
+                          {selectedAttendances.filter((a) => a.status.toLowerCase() === "absent").length}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-blue-600 dark:text-blue-400">Total Records:</p>
+                        <p className="font-bold text-blue-700 dark:text-blue-300">{selectedAttendances.length}</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
             </div>
 
             {/* Deductions */}

@@ -6,6 +6,7 @@ use App\Models\Attendance;
 use App\Models\Employee;
 use App\Models\PayrollEntry;
 use App\Models\PayrollPeriod;
+use App\Models\Department;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -14,128 +15,153 @@ use Inertia\Inertia;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Throwable;
 use App\Http\Controllers\Controller;
+use Illuminate\Support\Facades\Schema;
 
 class PayrollController extends Controller {
   // Basic CRUD Operations
   public function index(Request $request)
   {
-      try {
-          // Start with a base query
-          $query = PayrollEntry::with(['employee', 'payrollPeriod']);
-          
-          // Apply search filter if provided
-          if ($request->has('search') && !empty($request->search)) {
-              $search = $request->search;
-              $query->whereHas('employee', function($q) use ($search) {
-                  $q->where('full_name', 'like', "%{$search}%")
-                    ->orWhere('employee_number', 'like', "%{$search}%");
-              });
-          }
-          
-          // Apply status filter if provided
-          if ($request->has('status') && !empty($request->status)) {
-              $query->where('status', $request->status);
-          }
-          
-          // Apply period filter if provided - using week_id instead of period_start
-          if ($request->has('period') && !empty($request->period)) {
-              $query->where('week_id', $request->period);
-          }
-      
-          // Get all entries for summary calculations - this query is not affected by pagination
-          $allEntries = PayrollEntry::get();
-      
-          // Calculate summary statistics from all entries
-          $totalGrossPay = $allEntries->sum('gross_pay');
-          $totalNetPay = $allEntries->sum('net_pay');
-          $totalDeductions = $allEntries->sum('total_deductions');
-          $completedCount = $allEntries->filter(function($entry) {
-              return in_array(strtolower($entry->status), ['paid', 'approved']);
-          })->count();
-          $pendingCount = $allEntries->filter(function($entry) {
-              return in_array(strtolower($entry->status), ['pending', 'generated']);
-          })->count();
-      
-          // Paginate the results
-          $perPage = $request->input('per_page', 10); // Default 10 items per page
-          $page = $request->input('page', 1);
-          $paginatedEntries = $query->paginate($perPage);
-      
-          // Transform the paginated data
-          $transformedEntries = $paginatedEntries->getCollection()->map(function($payroll) {
-              return [
-                  'id' => $payroll->id,
-                  'employee_number' => $payroll->employee_number,
-                  'full_name' => $payroll->employee ? $payroll->employee->full_name : '',
-                  'department' => $payroll->employee ? $payroll->department : null,
-                  'position' => $payroll->employee ? $payroll->position : null,
-                  'week_id' => $payroll->week_id,
-                  'daily_rate' => $payroll->daily_rate,
-                  'basic_salary' => $payroll->basic_salary ?? 0,
-                  'gross_pay' => (string)$payroll->gross_pay,
-                  'sss_deduction' => (string)$payroll->sss_deduction,
-                  'philhealth_deduction' => (string)$payroll->philhealth_deduction,
-                  'pagibig_deduction' => (string)$payroll->pagibig_deduction,
-                  'tax_deduction' => (string)$payroll->tax_deduction,
-                  'cash_advance' => (string)$payroll->cash_advance,
-                  'loan' => (string)$payroll->loan,
-                  'vat' => (string)$payroll->vat,
-                  'other_deductions' => (string)$payroll->other_deductions,
-                  'short' => (string)$payroll->short,
-                  'total_deductions' => (string)$payroll->total_deductions,
-                  'net_pay' => (string)$payroll->net_pay,
-                  'ytd_earnings' => (string)$payroll->ytd_earnings,
-                  'thirteenth_month_pay' => (string)$payroll->thirteenth_month_pay,
-                  'status' => $payroll->status,
-                  'created_at' => $payroll->created_at,
-                  'updated_at' => $payroll->updated_at,
-              ];
-          });
-      
-          // Create a new paginator with the transformed data
-          $paginatedResult = new \Illuminate\Pagination\LengthAwarePaginator(
-              $transformedEntries,
-              $paginatedEntries->total(),
-              $paginatedEntries->perPage(),
-              $paginatedEntries->currentPage(),
-              ['path' => \Request::url(), 'query' => $request->query()]
-          );
-      
-          // Add summary statistics
-          $summary = [
-              'totalGrossPay' => $totalGrossPay,
-              'totalNetPay' => $totalNetPay,
-              'totalDeductions' => $totalDeductions,
-              'completedCount' => $completedCount,
-              'pendingCount' => $pendingCount,
-              'totalCount' => $allEntries->count()
-          ];
+    try {
+        // Start with a base query
+        $query = PayrollEntry::with(['employee', 'payrollPeriod'])->orderBy('id', 'desc');
+        
+        // Apply search filter if provided
+        if ($request->has('search') && !empty($request->search)) {
+            $search = $request->search;
+            $query->whereHas('employee', function($q) use ($search) {
+                $q->where('full_name', 'like', "%{$search}%")
+                  ->orWhere('employee_number', 'like', "%{$search}%");
+            });
+        }
+        
+        // Apply status filter if provided
+        if ($request->has('status') && !empty($request->status)) {
+            $query->where('status', $request->status);
+        }
+        
+        // Apply period filter if provided - using week_id instead of period_start
+        if ($request->has('period') && !empty($request->period)) {
+            $query->where('week_id', $request->period);
+        }
 
-          // Always return a successful response, even with empty results
-          return Inertia::render('Payroll/Index', [
-              'payrollEntries' => $paginatedResult,
-              'payrollSummary' => $summary,
-              'employees' => Employee::all(),
-              'payrollPeriods' => PayrollPeriod::all(),
-              'filters' => $request->only(['search', 'status', 'period']),
-          ]);
-      } catch (\Exception $e) {
-          Log::error('Payroll Index Error: ' . $e->getMessage());
-          return Inertia::render('Payroll/Index', [
-              'error' => 'Failed to retrieve payrolls.',
-              'payrollEntries' => [],
-              'payrollSummary' => [
-                  'totalGrossPay' => 0,
-                  'totalNetPay' => 0,
-                  'totalDeductions' => 0,
-                  'completedCount' => 0,
-                  'pendingCount' => 0,
-                  'totalCount' => 0
-              ],
-              'employees' => [],
-              'payrollPeriods' => [],
-          ]);
-      }
+        // Apply department filter if provided
+        if ($request->has('department') && !empty($request->department)) {
+            $query->whereHas('employee', function($q) use ($request) {
+                $q->where('department', $request->department);
+            });
+        }
+    
+        // Get all entries for summary calculations - this query is not affected by pagination
+        $allEntries = PayrollEntry::with(['employee'])->get();
+    
+        // Calculate summary statistics from all entries
+        $totalGrossPay = $allEntries->sum('gross_pay');
+        $totalNetPay = $allEntries->sum('net_pay');
+        $totalDeductions = $allEntries->sum('total_deductions');
+        $completedCount = $allEntries->filter(function($entry) {
+            return in_array(strtolower($entry->status), ['paid', 'approved']);
+        })->count();
+        $pendingCount = $allEntries->filter(function($entry) {
+            return in_array(strtolower($entry->status), ['pending', 'generated']);
+        })->count();
+    
+        // Paginate the results
+        $perPage = $request->input('per_page', 10); // Default 10 items per page
+        $page = $request->input('page', 1);
+        $paginatedEntries = $query->paginate($perPage);
+    
+        // Transform the paginated data
+        $transformedEntries = $paginatedEntries->getCollection()->map(function($payroll) {
+            // Get department information safely - department is a field, not a relationship
+            $departmentName = '';
+            
+            if ($payroll->employee) {
+                $departmentName = $payroll->employee->department ?? '';
+            }
+            
+            return [
+                'id' => $payroll->id,
+                'employee_number' => $payroll->employee_number,
+                'full_name' => $payroll->employee ? $payroll->employee->full_name : '',
+                'department_name' => $departmentName,
+                'position' => $payroll->employee ? $payroll->employee->position : null,
+                'week_id' => $payroll->week_id,
+                'daily_rate' => $payroll->daily_rate,
+                'basic_salary' => $payroll->basic_salary ?? 0,
+                'gross_pay' => (string)$payroll->gross_pay,
+                'sss_deduction' => (string)$payroll->sss_deduction,
+                'philhealth_deduction' => (string)$payroll->philhealth_deduction,
+                'pagibig_deduction' => (string)$payroll->pagibig_deduction,
+                'tax_deduction' => (string)$payroll->tax_deduction,
+                'cash_advance' => (string)$payroll->cash_advance,
+                'loan' => (string)$payroll->loan,
+                'vat' => (string)$payroll->vat,
+                'other_deductions' => (string)$payroll->other_deductions,
+                'short' => (string)$payroll->short,
+                'total_deductions' => (string)$payroll->total_deductions,
+                'net_pay' => (string)$payroll->net_pay,
+                'ytd_earnings' => (string)$payroll->ytd_earnings,
+                'thirteenth_month_pay' => (string)$payroll->thirteenth_month_pay,
+                'status' => $payroll->status,
+                'created_at' => $payroll->created_at,
+                'updated_at' => $payroll->updated_at,
+            ];
+        });
+    
+        // Create a new paginator with the transformed data
+        $paginatedResult = new \Illuminate\Pagination\LengthAwarePaginator(
+            $transformedEntries,
+            $paginatedEntries->total(),
+            $paginatedEntries->perPage(),
+            $paginatedEntries->currentPage(),
+            ['path' => \Request::url(), 'query' => $request->query()]
+        );
+    
+        // Add summary statistics
+        $summary = [
+            'totalGrossPay' => $totalGrossPay,
+            'totalNetPay' => $totalNetPay,
+            'totalDeductions' => $totalDeductions,
+            'completedCount' => $completedCount,
+            'pendingCount' => $pendingCount,
+            'totalCount' => $allEntries->count()
+        ];
+
+        // Get unique departments from employees
+        $departments = Employee::select('department')
+    ->distinct()
+    ->whereNotNull('department')
+    ->where('department', '!=', '')
+    ->pluck('department')
+    ->toArray();
+        
+        // Always return a successful response, even with empty results
+        return Inertia::render('Payroll/Index', [
+            'payrollEntries' => $paginatedResult,
+            'payrollSummary' => $summary,
+            'employees' => Employee::all(),
+            'departments' => $departments,
+            'payrollPeriods' => PayrollPeriod::all(),
+            'filters' => $request->only(['search', 'status', 'period', 'department']),
+        ]);
+    } catch (\Exception $e) {
+        Log::error('Payroll Index Error: ' . $e->getMessage());
+        return Inertia::render('Payroll/Index', [
+            'error' => 'Failed to retrieve payrolls.',
+            'payrollEntries' => [],
+            'payrollSummary' => [
+                'totalGrossPay' => 0,
+                'totalNetPay' => 0,
+                'totalDeductions' => 0,
+                'completedCount' => 0,
+                'pendingCount' => 0,
+                'totalCount' => 0
+            ],
+            'employees' => [],
+            'departments' => [],
+            'payrollPeriods' => [],
+        ]);
+    }
   }
 
   // FIXED: Enhanced store method with better error handling and debugging
@@ -209,6 +235,39 @@ class PayrollController extends Controller {
               $payroll->$key = $value;
           }
           
+          // Log the data before creation
+          Log::info('Creating payroll entry with validated data:', [
+              'validated_data' => $validated
+          ]);
+
+          Log::info('About to create PayrollEntry with data:', [
+              'employee_number' => $validated['employee_number'],
+              'week_id' => $validated['week_id'],
+              'gross_pay' => $validated['gross_pay'],
+              'status' => $validated['status']
+          ]);
+
+          // Create a new PayrollEntry instance and set its properties
+          $payroll = new PayrollEntry();
+          
+          // Only set non-generated columns
+          $payroll->employee_number = $validated['employee_number'];
+          $payroll->week_id = $validated['week_id'];
+          $payroll->daily_rate = $validated['daily_rate'] ?? null;
+          $payroll->gross_pay = $validated['gross_pay'];
+          $payroll->sss_deduction = $validated['sss_deduction'];
+          $payroll->philhealth_deduction = $validated['philhealth_deduction'];
+          $payroll->pagibig_deduction = $validated['pagibig_deduction'];
+          $payroll->tax_deduction = $validated['tax_deduction'];
+          $payroll->cash_advance = $validated['cash_advance'];
+          $payroll->loan = $validated['loan'];
+          $payroll->vat = $validated['vat'];
+          $payroll->other_deductions = $validated['other_deductions'];
+          $payroll->short = $validated['short'];
+          $payroll->ytd_earnings = $validated['ytd_earnings'];
+          $payroll->thirteenth_month_pay = $validated['thirteenth_month_pay'];
+          $payroll->status = $validated['status'];
+          
           // Save the model
           $saved = $payroll->save();
           
@@ -279,7 +338,7 @@ class PayrollController extends Controller {
               'short' => 'nullable|numeric|min:0',
               'ytd_earnings' => 'nullable|numeric|min:0',
               'thirteenth_month_pay' => 'nullable|numeric|min:0',
-              'status' => 'required|string|in:generated,approved,paid,pending,rejected',
+              'status' => 'required|string|in:generated,approved,paid,pending,rejected,Generated,Approved,Paid,Pending,Rejected',
           ]);
 
           // Set default values for nullable fields
@@ -294,7 +353,7 @@ class PayrollController extends Controller {
           // Get the employee
           $employee = Employee::where('employee_number', $validated['employee_number'])->first();
 
-          // Only apply short if employee is Allen One
+          // Only apply short if employee is Allen One - department is a field, not a relationship
           if (!$employee || $employee->department !== 'Allen One') {
               $validated['short'] = 0; // Force to 0 for non-Allen One employees
           }
@@ -331,10 +390,23 @@ class PayrollController extends Controller {
               'status' => $validated['status']
           ]);
 
-          // Update each property individually
-          foreach ($validated as $key => $value) {
-              $payroll->$key = $value;
-          }
+          // Update only non-generated columns
+          $payroll->employee_number = $validated['employee_number'];
+          $payroll->week_id = $validated['week_id'];
+          $payroll->daily_rate = $validated['daily_rate'] ?? null;
+          $payroll->gross_pay = $validated['gross_pay'];
+          $payroll->sss_deduction = $validated['sss_deduction'];
+          $payroll->philhealth_deduction = $validated['philhealth_deduction'];
+          $payroll->pagibig_deduction = $validated['pagibig_deduction'];
+          $payroll->tax_deduction = $validated['tax_deduction'];
+          $payroll->cash_advance = $validated['cash_advance'] ?? 0;
+          $payroll->loan = $validated['loan'] ?? 0;
+          $payroll->vat = $validated['vat'] ?? 0;
+          $payroll->other_deductions = $validated['other_deductions'] ?? 0;
+          $payroll->short = $validated['short'] ?? 0;
+          $payroll->ytd_earnings = $validated['ytd_earnings'] ?? 0;
+          $payroll->thirteenth_month_pay = $validated['thirteenth_month_pay'] ?? 0;
+          $payroll->status = $validated['status'];
           
           // Save the changes
           $saved = $payroll->save();
@@ -378,126 +450,210 @@ class PayrollController extends Controller {
 
   // FIXED: Enhanced generatePayroll method with better error handling and debugging
   public function generatePayroll(Request $request)
-  {
-      try {
-          $request->validate([
-              'week_id' => 'required|exists:payroll_periods,week_id',
-          ]);
+{
+    try {
+        // Validate the request
+        $request->validate([
+            'week_id' => 'required|exists:payroll_periods,week_id',
+        ]);
 
-          $weekId = $request->input('week_id');
-          Log::info('Generating payroll for week_id: ' . $weekId);
-          
-          $payrollPeriod = PayrollPeriod::where('week_id', $weekId)->firstOrFail();
-          $startDate = $payrollPeriod->period_start;
-          $endDate = $payrollPeriod->period_end;
+        $weekId = $request->input('week_id');
+        Log::info('Generating payroll for week_id: ' . $weekId);
+        
+        // Find the payroll period
+        $payrollPeriod = PayrollPeriod::where('week_id', $weekId)->firstOrFail();
+        Log::info('Found payroll period:', $payrollPeriod->toArray());
+        
+        $startDate = $payrollPeriod->period_start;
+        $endDate = $payrollPeriod->period_end;
 
-          $employees = Employee::all();
-          Log::info('Found ' . $employees->count() . ' employees for payroll generation');
+        // Get all employees
+        $employees = Employee::all();
+        Log::info('Found ' . $employees->count() . ' employees for payroll generation');
 
-          DB::beginTransaction();
-          
-          $createdCount = 0;
-          $skippedCount = 0;
-          
-          foreach ($employees as $employee) {
-              // Check if payroll entry already exists for this employee and week
-              $exists = PayrollEntry::where('employee_number', $employee->employee_number)
-                  ->where('week_id', $weekId)
-                  ->exists();
-                  
-              if ($exists) {
-                  Log::info('Skipping payroll generation for employee ' . $employee->employee_number . ' - entry already exists');
-                  $skippedCount++;
-                  continue;
-              }
+        // Debug: Check if we have any employees
+        if ($employees->count() == 0) {
+            Log::error('No employees found in the database');
+            throw new \Exception('No employees found in the database');
+        }
 
-              $basicSalary = $employee->monthly_salary ?? 0;
-              $dailyRate = $employee->daily_rate ?? 0;
-              $grossSalary = $dailyRate * 5; // Assuming 5 working days per week
-              
-              Log::info('Calculating payroll for employee: ' . $employee->employee_number, [
-                  'basic_salary' => $basicSalary,
-                  'daily_rate' => $dailyRate,
-                  'gross_salary' => $grossSalary
-              ]);
+        // Get existing payroll entries for this period
+        $existingEntries = PayrollEntry::where('week_id', $weekId)->get();
+        $existingEmployeeNumbers = $existingEntries->pluck('employee_number')->toArray();
+        
+        Log::info('Found ' . $existingEntries->count() . ' existing payroll entries for week_id: ' . $weekId);
+        Log::info('Existing employee numbers:', $existingEmployeeNumbers);
 
-              // Calculate deductions
-              $sssDeduction = $this->calculateSSS($grossSalary);
-              $philhealthDeduction = $this->calculatePhilhealth($grossSalary);
-              $pagibigDeduction = $this->calculatePagibig($grossSalary);
-              $taxDeduction = $this->calculateTax($grossSalary);
-              
-              $totalDeductions = $sssDeduction + $philhealthDeduction + $pagibigDeduction + $taxDeduction;
-              $netPay = $grossSalary - $totalDeductions;
+        DB::beginTransaction();
+        
+        $createdCount = 0;
+        $skippedCount = 0;
+        $payrollEntries = [];
+        
+        foreach ($employees as $employee) {
+            Log::info('Processing employee: ' . $employee->employee_number . ' - ' . $employee->full_name);
+            
+            // Skip employees who already have a payroll entry for this period
+            if (in_array($employee->employee_number, $existingEmployeeNumbers)) {
+                Log::info('Skipping employee ' . $employee->employee_number . ' as they already have a payroll entry for this period');
+                $skippedCount++;
+                continue;
+            }
+            
+            // Get attendance records for this employee in the period
+            $attendanceRecords = Attendance::where('employee_number', $employee->employee_number)
+                ->whereBetween('work_date', [$startDate, $endDate])
+                ->get();
+                
+            Log::info('Found ' . $attendanceRecords->count() . ' attendance records for employee ' . $employee->employee_number);
+            
+            // Calculate gross pay based on attendance
+            $grossPay = 0;
+            $dailyRates = [];
+            
+            if ($attendanceRecords->count() > 0) {
+                foreach ($attendanceRecords as $record) {
+                    $status = $record->status;
+                    $dailyRate = $record->daily_rate ?? $employee->daily_rate ?? 0;
+                    $adjustment = $record->adjustment ?? 0;
+                    
+                    // Calculate pay based on status
+                    $amount = 0;
+                    switch (strtolower($status)) {
+                        case 'present':
+                            $amount = $dailyRate;
+                            break;
+                        case 'half day':
+                            $amount = $dailyRate / 2;
+                            break;
+                        case 'absent':
+                        case 'day off':
+                            $amount = 0;
+                            break;
+                        default:
+                            $amount = $dailyRate;
+                            break;
+                    }
+                    
+                    $grossPay += $amount + $adjustment;
+                    
+                    // Store daily rate info for reference
+                    $dailyRates[] = [
+                        'date' => $record->work_date,
+                        'amount' => $dailyRate,
+                        'status' => $status,
+                        'adjustment' => $adjustment
+                    ];
+                }
+            } else {
+                // If no attendance records, use default calculation (5 working days)
+                $dailyRate = $employee->daily_rate ?? 0;
+                $grossPay = $dailyRate * 5;
+                
+                Log::info('No attendance records found, using default calculation. Daily rate: ' . $dailyRate . ', Gross pay: ' . $grossPay);
+                
+                // Create default daily rates for the period
+                $currentDate = new \DateTime($startDate);
+                $endDateTime = new \DateTime($endDate);
+                
+                while ($currentDate <= $endDateTime) {
+                    $dateStr = $currentDate->format('Y-m-d');
+                    $isWeekend = in_array($currentDate->format('N'), [6, 7]); // 6=Saturday, 7=Sunday
+                    
+                    $dailyRates[] = [
+                        'date' => $dateStr,
+                        'amount' => $dailyRate,
+                        'status' => $isWeekend ? 'Day Off' : 'Present',
+                        'adjustment' => 0
+                    ];
+                    
+                    $currentDate->modify('+1 day');
+                }
+            }
+            
+            // Calculate deductions
+            $sssDeduction = $this->calculateSSS($grossPay);
+            $philhealthDeduction = $this->calculatePhilhealth($grossPay);
+            $pagibigDeduction = $this->calculatePagibig($grossPay);
+            $taxDeduction = $this->calculateTax($grossPay);
+            
+            $totalDeductions = $sssDeduction + $philhealthDeduction + $pagibigDeduction + $taxDeduction;
+            $netPay = max(0, $grossPay - $totalDeductions);
 
-              Log::info('Generating payroll for employee ' . $employee->employee_number, [
-                  'week_id' => $weekId,
-                  'daily_rate' => $dailyRate,
-                  'gross_salary' => $grossSalary,
-                  'deductions' => [
-                      'sss' => $sssDeduction,
-                      'philhealth' => $philhealthDeduction,
-                      'pagibig' => $pagibigDeduction,
-                      'tax' => $taxDeduction
-                  ]
-              ]);
+            Log::info('Calculated payroll for employee ' . $employee->employee_number, [
+                'gross_pay' => $grossPay,
+                'total_deductions' => $totalDeductions,
+                'net_pay' => $netPay
+            ]);
 
-              // Create payroll entry
-              $payrollData = [
-                  'employee_number' => $employee->employee_number,
-                  'week_id' => $weekId,
-                  'basic_salary' => $basicSalary,
-                  'gross_pay' => $grossSalary,
-                  'sss_deduction' => $sssDeduction,
-                  'philhealth_deduction' => $philhealthDeduction,
-                  'pagibig_deduction' => $pagibigDeduction,
-                  'tax_deduction' => $taxDeduction,
-                  'cash_advance' => 0,
-                  'loan' => 0,
-                  'vat' => 0,
-                  'other_deductions' => 0,
-                  'short' => 0,
-                  'total_deductions' => $totalDeductions,
-                  'net_pay' => $netPay,
-                  'daily_rate' => $dailyRate,
-                  'status' => 'generated',
-                  'ytd_earnings' => 0,
-                  'thirteenth_month_pay' => 0,
-                  'created_at' => now(),
-                  'updated_at' => now(),
-              ];
-              
-              Log::info('Creating payroll entry with data:', $payrollData);
-              
-              // Create the entry
-              $payroll = new PayrollEntry();
-              foreach ($payrollData as $key => $value) {
-                  $payroll->$key = $value;
-              }
-              
-              $saved = $payroll->save();
-              
-              if (!$saved) {
-                  throw new \Exception('Failed to save payroll entry for employee ' . $employee->employee_number);
-              }
-              
-              Log::info('Created payroll entry ID: ' . $payroll->id);
-              $createdCount++;
-          }
+            // Create payroll entry data
+            $payrollEntries[] = [
+                'employee_number' => $employee->employee_number,
+                'week_id' => $weekId,
+                'gross_pay' => $grossPay,
+                'sss_deduction' => $sssDeduction,
+                'philhealth_deduction' => $philhealthDeduction,
+                'pagibig_deduction' => $pagibigDeduction,
+                'tax_deduction' => $taxDeduction,
+                'cash_advance' => 0,
+                'loan' => 0,
+                'vat' => 0,
+                'other_deductions' => 0,
+                'short' => 0,
+                // 'total_deductions' and 'net_pay' are GENERATED columns, so we don't include them
+                'daily_rate' => $employee->daily_rate ?? 0,
+                'status' => 'Pending',
+                'ytd_earnings' => 0,
+                'thirteenth_month_pay' => 0,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ];
+            
+            $createdCount++;
+        }
+        
+        // Batch insert all payroll entries
+        if (!empty($payrollEntries)) {
+            Log::info('Attempting to insert ' . count($payrollEntries) . ' payroll entries');
+            
+            try {
+                PayrollEntry::insert($payrollEntries);
+                Log::info('Successfully inserted ' . count($payrollEntries) . ' payroll entries');
+            } catch (\Exception $e) {
+                Log::error('Error inserting payroll entries: ' . $e->getMessage());
+                Log::error('First entry data: ' . json_encode($payrollEntries[0] ?? []));
+                throw $e;
+            }
+        } else {
+            Log::warning('No new payroll entries to insert');
+        }
 
-          DB::commit();
-          Log::info('Payroll generation completed. Created: ' . $createdCount . ', Skipped: ' . $skippedCount);
-          
-          return redirect()->route('payroll.index')
-              ->with('success', 'Payroll generated successfully for the period. Created: ' . $createdCount . ', Skipped: ' . $skippedCount);
-      } catch (Throwable $e) {
-          DB::rollback();
-          Log::error('Payroll generation failed: ' . $e->getMessage());
-          Log::error('Stack trace: ' . $e->getTraceAsString());
-          return redirect()->back()
-              ->with('error', 'Payroll generation failed: ' . $e->getMessage());
-      }
-  }
+        DB::commit();
+        Log::info('Payroll generation completed. Created: ' . $createdCount . ', Skipped: ' . $skippedCount);
+        
+        if ($request->wantsJson()) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Payroll generated successfully for the period. Created: ' . $createdCount . ', Skipped: ' . $skippedCount
+            ]);
+        }
+        
+        return redirect()->back()->with('success', 'Payroll generated successfully for the period. Created: ' . $createdCount . ', Skipped: ' . $skippedCount);
+    } catch (Throwable $e) {
+        DB::rollback();
+        Log::error('Payroll generation failed: ' . $e->getMessage());
+        Log::error('Stack trace: ' . $e->getTraceAsString());
+        
+        if ($request->wantsJson()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Payroll generation failed: ' . $e->getMessage()
+            ], 500);
+        }
+        
+        return redirect()->back()->with('error', 'Payroll generation failed: ' . $e->getMessage());
+    }
+}
 
   public function listPeriods(Request $request)
   {
@@ -568,143 +724,151 @@ class PayrollController extends Controller {
   }
 
   public function generateFromAttendance(Request $request)
-  {
-      try {
-          Log::info('Generating payroll from attendance with request data:', $request->all());
-          
-          $validated = $request->validate([
-              'payroll_period_id' => 'required|exists:payroll_periods,id',
-              'week_id' => 'required|exists:payroll_periods,week_id',
-              'include_daily_rates' => 'boolean',
-              'respect_attendance_status' => 'boolean',
-              'overwrite_existing' => 'boolean',
-          ]);
+{
+    try {
+        Log::info('Generating payroll from attendance with request data:', $request->all());
+        
+        $validated = $request->validate([
+            'payroll_period_id' => 'required|exists:payroll_periods,id',
+            'week_id' => 'required|exists:payroll_periods,week_id',
+            'include_daily_rates' => 'boolean',
+            'respect_attendance_status' => 'boolean',
+            'overwrite_existing' => 'boolean',
+        ]);
 
-          Log::info('Validated data:', $validated);
-          
-          $payrollPeriod = PayrollPeriod::where('week_id', $validated['week_id'])->firstOrFail();
-          $overwriteExisting = $validated['overwrite_existing'] ?? false;
+        Log::info('Validated data:', $validated);
+        
+        $payrollPeriod = PayrollPeriod::where('week_id', $validated['week_id'])->firstOrFail();
+        
+        $overwriteExisting = $validated['overwrite_existing'] ?? false;
 
-          if (!$overwriteExisting && PayrollEntry::where('week_id', $validated['week_id'])->exists()) {
-              Log::warning('Payroll records already exist for this period and overwrite_existing is false');
-              return response()->json([
-                  'message' => 'Payroll records already exist for this period. Set overwrite_existing to true to replace them.',
-              ], 422);
-          }
+        if (!$overwriteExisting && PayrollEntry::where('week_id', $validated['week_id'])->exists()) {
+            Log::warning('Payroll records already exist for this period and overwrite_existing is false');
+            return response()->json([
+                'message' => 'Payroll records already exist for this period. Set overwrite_existing to true to replace them.',
+            ], 422);
+        }
 
-          if ($overwriteExisting) {
-              $deletedCount = PayrollEntry::where('week_id', $validated['week_id'])->delete();
-              Log::info("Deleted {$deletedCount} existing payroll entries for week_id: {$validated['week_id']}");
-          }
+        if ($overwriteExisting) {
+            $deletedCount = PayrollEntry::where('week_id', $validated['week_id'])->delete();
+            Log::info("Deleted {$deletedCount} existing payroll entries for week_id: {$validated['week_id']}");
+        }
 
-          $employees = Employee::all();
-          Log::info("Found {$employees->count()} employees");
-          
-          $attendanceRecords = DB::table('attendance')
-              ->whereBetween('work_date', [$payrollPeriod->period_start, $payrollPeriod->period_end])
-              ->get();
-          Log::info("Found {$attendanceRecords->count()} attendance records in the period");
+        $employees = Employee::all();
+        Log::info("Found {$employees->count()} employees");
+        
+        $attendanceRecords = DB::table('attendance')
+            ->whereBetween('work_date', [$payrollPeriod->period_start, $payrollPeriod->period_end])
+            ->get();
+        Log::info("Found {$attendanceRecords->count()} attendance records in the period");
 
-          $attendanceByEmployee = [];
-          foreach ($attendanceRecords as $record) {
-              $attendanceByEmployee[$record->employee_number][] = $record;
-          }
+        $attendanceByEmployee = [];
+        foreach ($attendanceRecords as $record) {
+            $attendanceByEmployee[$record->employee_number][] = $record;
+        }
 
-          $payrollRecords = [];
-          foreach ($employees as $employee) {
-              $employeeAttendance = $attendanceByEmployee[$employee->employee_number] ?? [];
-              $grossPay = 0;
-              $dailyRates = [];
+        $payrollRecords = [];
+        foreach ($employees as $employee) {
+            $employeeAttendance = $attendanceByEmployee[$employee->employee_number] ?? [];
+            $grossPay = 0;
+            $dailyRates = [];
 
-              if (count($employeeAttendance) > 0 && ($validated['respect_attendance_status'] ?? true)) {
-                  foreach ($employeeAttendance as $record) {
-                      $status = $record->status;
-                      $dailyRate = $record->daily_rate ?? $employee->daily_rate;
-                      $adjustment = $record->adjustment ?? 0;
+            if (count($employeeAttendance) > 0 && ($validated['respect_attendance_status'] ?? true)) {
+                foreach ($employeeAttendance as $record) {
+                    $status = $record->status;
+                    $dailyRate = $record->daily_rate ?? $employee->daily_rate;
+                    $adjustment = $record->adjustment ?? 0;
 
-                      $amount = match (strtolower($status)) {
-                          'present' => $dailyRate,
-                          'half day' => $dailyRate / 2,
-                          'absent', 'day off' => 0,
-                          default => $dailyRate,
-                      };
+                    $amount = match (strtolower($status)) {
+                        'present' => $dailyRate,
+                        'half day' => $dailyRate / 2,
+                        'absent', 'day off' => 0,
+                        default => $dailyRate,
+                    };
 
-                      $grossPay += $amount + $adjustment;
+                    $grossPay += $amount + $adjustment;
 
-                      if ($validated['include_daily_rates'] ?? false) {
-                          $dailyRates[] = [
-                              'date' => $record->work_date,
-                              'amount' => $dailyRate,
-                              'status' => $status,
-                              'adjustment' => $adjustment
-                          ];
-                      }
-                  }
-              } else {
-                  $startDate = new \DateTime($payrollPeriod->period_start);
-                  $endDate = new \DateTime($payrollPeriod->period_end);
-                  $days = $startDate->diff($endDate)->days + 1;
-                  $grossPay = $employee->daily_rate * $days;
-              }
+                    if ($validated['include_daily_rates'] ?? false) {
+                        $dailyRates[] = [
+                            'date' => $record->work_date,
+                            'amount' => $dailyRate,
+                            'status' => $status,
+                            'adjustment' => $adjustment
+                        ];
+                    }
+                }
+            } else {
+                $startDate = new \DateTime($payrollPeriod->period_start);
+                $endDate = new \DateTime($payrollPeriod->period_end);
+                $days = $startDate->diff($endDate)->days + 1;
+                $grossPay = $employee->daily_rate * $days;
+            }
 
-              $sssDeduction = $this->calculateSSS($grossPay);
-              $philhealthDeduction = $this->calculatePhilhealth($grossPay);
-              $pagibigDeduction = $this->calculatePagibig($grossPay);
-              $taxDeduction = $this->calculateTax($grossPay);
+            $sssDeduction = $this->calculateSSS($grossPay);
+            $philhealthDeduction = $this->calculatePhilhealth($grossPay);
+            $pagibigDeduction = $this->calculatePagibig($grossPay);
+            $taxDeduction = $this->calculateTax($grossPay);
 
-              $totalDeductions = $sssDeduction + $philhealthDeduction + $pagibigDeduction + $taxDeduction;
-              $netPay = max(0, $grossPay - $totalDeductions);
+            $totalDeductions = $sssDeduction + $philhealthDeduction + $pagibigDeduction + $taxDeduction;
+            $netPay = max(0, $grossPay - $totalDeductions);
 
-              $payrollRecords[] = [
-                  'employee_number' => $employee->employee_number,
-                  'week_id' => $payrollPeriod->week_id,
-                  'basic_salary' => $employee->monthly_salary,
-                  'gross_pay' => $grossPay,
-                  'sss_deduction' => $sssDeduction,
-                  'philhealth_deduction' => $philhealthDeduction,
-                  'pagibig_deduction' => $pagibigDeduction,
-                  'tax_deduction' => $taxDeduction,
-                  'loan' => 0,
-                  'other_deductions' => 0,
-                  'short' => 0,
-                  'total_deductions' => $totalDeductions,
-                  'net_pay' => $netPay,
-                  'daily_rate' => $employee->daily_rate,
-                  'status' => 'generated',
-                  'ytd_earnings' => 0,
-                  'thirteenth_month_pay' => 0,
-                  'created_at' => now(),
-                  'updated_at' => now(),
-              ];
-          }
+            $payrollRecord = [
+                'employee_number' => $employee->employee_number,
+                'week_id' => $payrollPeriod->week_id,
+                'gross_pay' => $grossPay,
+                'sss_deduction' => $sssDeduction,
+                'philhealth_deduction' => $philhealthDeduction,
+                'pagibig_deduction' => $pagibigDeduction,
+                'tax_deduction' => $taxDeduction,
+                'cash_advance' => 0,
+                'loan' => 0,
+                'vat' => 0,
+                'other_deductions' => 0,
+                'short' => 0,
+                // 'total_deductions' and 'net_pay' are GENERATED columns, so we don't include them
+                'daily_rate' => $employee->daily_rate,
+                'status' => 'generated',
+                'ytd_earnings' => 0,
+                'thirteenth_month_pay' => 0,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ];
 
-          Log::info("Prepared " . count($payrollRecords) . " payroll records for insertion");
+            // Only add daily_rates if include_daily_rates is true and the column exists
+            if (($validated['include_daily_rates'] ?? false) && Schema::hasColumn('payroll_entries', 'daily_rates')) {
+                $payrollRecord['daily_rates'] = json_encode($dailyRates);
+            }
 
-          if (!empty($payrollRecords)) {
-              try {
-                  DB::beginTransaction();
-                  PayrollEntry::insert($payrollRecords);
-                  DB::commit();
-                  Log::info("Successfully inserted " . count($payrollRecords) . " payroll records");
-                  return redirect()->back()->with('success', 'Payroll generated successfully!');
-              } catch (\Exception $e) {
-                  DB::rollBack();
-                  Log::error("Failed to insert payroll records: " . $e->getMessage());
-                  return redirect()->back()->with('error', 'Failed to generate payroll: ' . $e->getMessage());
-              }
-          }
+            $payrollRecords[] = $payrollRecord;
+        }
 
-          return redirect()->back()->with('success', 'Payroll generated successfully!');
-      } catch (\Exception $e) {
-          Log::error('Payroll Generation Error: ' . $e->getMessage());
-          Log::error('Stack trace: ' . $e->getTraceAsString());
-          return redirect()->back()->with('error', 'Failed to generate payroll: ' . $e->getMessage());
-      }
-  }
+        Log::info("Prepared " . count($payrollRecords) . " payroll records for insertion");
+
+        if (!empty($payrollRecords)) {
+            try {
+                DB::beginTransaction();
+                PayrollEntry::insert($payrollRecords);
+                DB::commit();
+                Log::info("Successfully inserted " . count($payrollRecords) . " payroll records");
+                return redirect()->back()->with('success', 'Payroll generated successfully!');
+            } catch (\Exception $e) {
+                DB::rollBack();
+                Log::error("Failed to insert payroll records: " . $e->getMessage());
+                return redirect()->back()->with('error', 'Failed to generate payroll: ' . $e->getMessage());
+            }
+        }
+
+        return redirect()->back()->with('success', 'Payroll generated successfully!');
+    } catch (\Exception $e) {
+        Log::error('Payroll Generation Error: ' . $e->getMessage());
+        Log::error('Stack trace: ' . $e->getTraceAsString());
+        return redirect()->back()->with('error', 'Failed to generate payroll: ' . $e->getMessage());
+    }
+}
 
   // Payroll Period Management
   public function createPeriod(Request $request)
-  {
+{
       DB::beginTransaction();
       
       try {
@@ -864,62 +1028,128 @@ class PayrollController extends Controller {
   }
 
   // Payslip and Attendance Methods
-  public function printPayslip($id) {
-      try {
-          $payroll = PayrollEntry::with(['employee', 'payrollPeriod'])->findOrFail($id);
-          $payrollPeriod = $payroll->payrollPeriod;
+  public function printPayslip($id, Request $request) {
+  try {
+      // Check if we should overwrite existing payslip
+      $overwrite = $request->has('overwrite') ? (bool)$request->input('overwrite') : false;
+      
+      // Find the payroll entry with related data
+      $payroll = PayrollEntry::with(['employee', 'payrollPeriod'])->findOrFail($id);
+      
+      // Log the payroll data for debugging
+      Log::info('Printing payslip for payroll ID: ' . $id, [
+          'payroll_data' => $payroll->toArray(),
+          'overwrite' => $overwrite
+      ]);
+      
+      // Check if payroll period exists
+      $payrollPeriod = $payroll->payrollPeriod;
+      if (!$payrollPeriod) {
+          Log::error('Payroll period not found for payroll ID: ' . $id);
+          return redirect()->back()->with('error', 'Payroll period not found');
+      }
+      
+      // Format dates
+      $startDate = new \DateTime($payrollPeriod->period_start);
+      $endDate = new \DateTime($payrollPeriod->period_end);
+      $formattedStartDate = $startDate->format('Y-m-d');
+      $formattedEndDate = $endDate->format('Y-m-d');
+
+      // Check if a payslip file already exists
+      $payslipPath = storage_path("app/payslips/payslip-{$payroll->employee_number}-{$payrollPeriod->week_id}.pdf");
+      $payslipExists = file_exists($payslipPath);
+      
+      if ($payslipExists && !$overwrite) {
+          Log::info('Payslip already exists and overwrite is false, returning existing payslip');
+          // Return existing payslip if it exists and overwrite is false
+          return response()->file($payslipPath);
+      }
+
+      // Get attendance records
+      $attendanceRecords = Attendance::where('employee_number', $payroll->employee_number)
+          ->whereBetween('work_date', [$formattedStartDate, $formattedEndDate])
+          ->orderBy('work_date')
+          ->get();
+      
+      Log::info('Found ' . $attendanceRecords->count() . ' attendance records for payslip');
+      
+      // If no attendance records found, try to use the daily_rates from the payroll entry
+      if ($attendanceRecords->isEmpty() && $payroll->daily_rates) {
+          Log::info('No attendance records found, using daily_rates from payroll entry');
           
-          if (!$payrollPeriod) {
-              return redirect()->back()->with('error', 'Payroll period not found');
+          // Parse daily_rates JSON
+          $dailyRates = null;
+          try {
+              if (is_string($payroll->daily_rates)) {
+                  $dailyRates = json_decode($payroll->daily_rates, true);
+              } else {
+                  $dailyRates = $payroll->daily_rates;
+              }
+          } catch (\Exception $e) {
+              Log::error('Error parsing daily_rates JSON: ' . $e->getMessage());
           }
           
-          $startDate = new \DateTime($payrollPeriod->period_start);
-          $endDate = new \DateTime($payrollPeriod->period_end);
-          $formattedStartDate = $startDate->format('Y-m-d');
-          $formattedEndDate = $endDate->format('Y-m-d');
-
-          $attendanceRecords = Attendance::where('employee_number', $payroll->employee_number)
-              ->whereBetween('work_date', [$formattedStartDate, $formattedEndDate])
-              ->orderBy('work_date')
-              ->get();
+          // Create attendance records from daily_rates
+          if (is_array($dailyRates)) {
+              Log::info('Creating attendance records from daily_rates', [
+                  'daily_rates_count' => count($dailyRates)
+              ]);
               
-          if ($attendanceRecords->isEmpty() && $payroll->daily_rates) {
-              $dailyRates = is_string($payroll->daily_rates) 
-                  ? json_decode($payroll->daily_rates, true) 
-                  : $payroll->daily_rates;
-                  
-              if (is_array($dailyRates)) {
-                  foreach ($dailyRates as $rate) {
-                      $date = $rate['date'] ?? $rate['work_date'] ?? null;
-                      if ($date) {
-                          $attendanceRecords[] = new Attendance([
-                              'id' => rand(1000, 9999),
-                              'employee_number' => $payroll->employee_number,
-                              'work_date' => $date,
-                              'daily_rate' => $rate['daily_rate'] ?? $payroll->employee->daily_rate ?? 0,
-                              'adjustment' => $rate['adjustment'] ?? 0,
-                              'status' => $rate['status'] ?? 'Present',
-                          ]);
-                      }
+              foreach ($dailyRates as $rate) {
+                  $date = $rate['date'] ?? $rate['work_date'] ?? null;
+                  if ($date) {
+                      // Create a new Attendance object
+                      $attendance = new Attendance([
+                          'id' => rand(1000, 9999),
+                          'employee_number' => $payroll->employee_number,
+                          'work_date' => $date,
+                          'daily_rate' => $rate['amount'] ?? $rate['daily_rate'] ?? $payroll->daily_rate ?? 0,
+                          'adjustment' => $rate['adjustment'] ?? 0,
+                          'status' => $rate['status'] ?? 'Present',
+                      ]);
+                      
+                      $attendanceRecords[] = $attendance;
                   }
               }
           }
-
-          return Inertia::render('Payroll/PrintPayslip', [
-              'payroll' => $payroll,
-              'attendances' => $attendanceRecords,
-              'period' => [
-                  'id' => $payrollPeriod->id,
-                  'period_start' => $formattedStartDate,
-                  'period_end' => $formattedEndDate,
-                  'week_id' => $payrollPeriod->week_id ?? null,
-              ],
-          ]);
-      } catch (\Exception $e) {
-          Log::error('Error preparing payslip data: ' . $e->getMessage());
-          return back()->with('error', 'Failed to prepare payslip data: ' . $e->getMessage());
       }
+      
+      // If still no attendance records, generate default ones
+      if ($attendanceRecords->isEmpty()) {
+          Log::info('No attendance records or daily_rates found, generating default records');
+          
+          // Get the employee
+          $employee = $payroll->employee;
+          if ($employee) {
+              $attendanceRecords = $this->generateDefaultAttendanceRecords(
+                  $employee,
+                  $formattedStartDate,
+                  $formattedEndDate
+              );
+          }
+      }
+      
+      // Log the final attendance records
+      Log::info('Final attendance records for payslip: ' . $attendanceRecords->count());
+
+      // Return the data to the view
+      return Inertia::render('Payroll/PrintPayslip', [
+          'payroll' => $payroll,
+          'attendances' => $attendanceRecords,
+          'period' => [
+              'id' => $payrollPeriod->id,
+              'period_start' => $formattedStartDate,
+              'period_end' => $formattedEndDate,
+              'week_id' => $payrollPeriod->week_id ?? null,
+          ],
+          'overwrite' => $overwrite,
+      ]);
+  } catch (\Exception $e) {
+      Log::error('Error preparing payslip data: ' . $e->getMessage());
+      Log::error('Stack trace: ' . $e->getTraceAsString());
+      return back()->with('error', 'Failed to prepare payslip data: ' . $e->getMessage());
   }
+}
 
   public function fetchAttendanceForPayslip(Request $request)
   {
@@ -974,11 +1204,14 @@ class PayrollController extends Controller {
       }
   }
 
-  public function generatePayslip($employeeId) {
-      $employee = Employee::findOrFail($employeeId);
+  public function generatePayslip($employeeNumber) 
+  {
+      // Find employee by employee_number instead of ID
+      $employee = Employee::where('employee_number', $employeeNumber)->firstOrFail();
+      
       $pdf = Pdf::loadView('payslip', compact('employee'))->setPaper('A4', 'portrait');
-
-      return $pdf->stream("payslip.pdf");
+  
+      return $pdf->stream("payslip-{$employeeNumber}.pdf");
   }
 
   // Helper Methods
@@ -1012,23 +1245,77 @@ class PayrollController extends Controller {
 
   // Deduction Calculations
   public function calculateSSS($grossPay) {
-      // Placeholder for SSS calculation logic
-      return 500;
-  }
+    // Convert weekly gross pay to monthly for calculation
+    $monthlyRate = $grossPay * 4;
+    
+    // Calculate SSS based on 2025 rates (5% employee contribution)
+    if ($monthlyRate <= 4000) {
+        return (4000 * 0.05) / 4; // Convert back to weekly
+    } else if ($monthlyRate > 30000) {
+        return (30000 * 0.05) / 4; // Convert back to weekly
+    } else {
+        // Round to the nearest 500 for MSC determination
+        $msc = ceil($monthlyRate / 500) * 500;
+        return ($msc * 0.05) / 4; // Convert back to weekly
+    }
+}
 
-  public function calculatePhilhealth($grossPay) {
-      // Placeholder for PhilHealth calculation logic
-      return 200;
-  }
+public function calculatePhilhealth($grossPay) {
+    // Convert weekly gross pay to monthly for calculation
+    $monthlyRate = $grossPay * 4;
+    
+    // Calculate PhilHealth based on 2025 rates (5% total, 2.5% employee contribution)
+    if ($monthlyRate < 10000) {
+        return (10000 * 0.025) / 4; // Convert back to weekly
+    } else if ($monthlyRate > 100000) {
+        return (100000 * 0.025) / 4; // Convert back to weekly
+    } else {
+        return ($monthlyRate * 0.025) / 4; // Convert back to weekly
+    }
+}
 
-  public function calculatePagibig($grossPay) {
-      // Placeholder for Pag-IBIG calculation logic
-      return 100;
-  }
 
-  public function calculateTax($grossPay) {
-      // Placeholder for Tax calculation logic
-      return 300;
-  }
+public function calculatePagibig($grossPay) {
+    // Convert weekly gross pay to monthly for calculation
+    $monthlyRate = $grossPay * 4;
+    
+    // Calculate Pag-IBIG based on 2025 rates (2% with max of ₱200)
+    return (min($monthlyRate * 0.02, 200)) / 4; // Convert back to weekly
+}
+
+  
+public function calculateTax($grossPay) {
+    // Convert weekly gross pay to monthly and annual
+    $monthlyRate = $grossPay * 4;
+    $annualRate = $monthlyRate * 12;
+    
+    // Calculate deductions to get taxable income
+    $sssMonthly = $this->calculateSSS($grossPay) * 4; // Convert weekly to monthly
+    $philhealthMonthly = $this->calculatePhilhealth($grossPay) * 4; // Convert weekly to monthly
+    $pagibigMonthly = $this->calculatePagibig($grossPay) * 4; // Convert weekly to monthly
+    
+    // Calculate annual taxable income
+    $annualDeductions = ($sssMonthly + $philhealthMonthly + $pagibigMonthly) * 12;
+    $taxableIncome = $annualRate - $annualDeductions;
+    
+    // Apply 2025 tax rates
+    $tax = 0;
+    if ($taxableIncome <= 250000) {
+        $tax = 0; // Exempt
+    } else if ($taxableIncome <= 400000) {
+        $tax = ($taxableIncome - 250000) * 0.15; // 15% of excess over 250,000
+    } else if ($taxableIncome <= 800000) {
+        $tax = 22500 + ($taxableIncome - 400000) * 0.20; // 22,500 + 20% of excess over 400,000
+    } else if ($taxableIncome <= 2000000) {
+        $tax = 102500 + ($taxableIncome - 800000) * 0.25; // 102,500 + 25% of excess over 800,000
+    } else if ($taxableIncome <= 8000000) {
+        $tax = 402500 + ($taxableIncome - 2000000) * 0.30; // 402,500 + 30% of excess over 2,000,000
+    } else {
+        $tax = 2202500 + ($taxableIncome - 8000000) * 0.35; // 2,202,500 + 35% of excess over 8,000,000
+    }
+    
+    // Convert annual tax to weekly
+    return $tax / 52;
+}
 }
 

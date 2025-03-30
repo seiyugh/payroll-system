@@ -1,5 +1,7 @@
 "use client"
 
+import { DialogFooter } from "@/components/ui/dialog"
+
 import React from "react"
 
 import { Head, router, usePage } from "@inertiajs/react"
@@ -18,34 +20,25 @@ import {
   Users,
   RefreshCw,
   FileSpreadsheet,
-  Wallet,
-  Info,
   Check,
   X,
   AlertCircle,
   Clock,
+  Trash2,
 } from "lucide-react"
 import AddAttendanceModal from "./AddAttendanceModal"
 import UpdateAttendanceModal from "./UpdateAttendanceModal"
 import BulkAddAttendanceModal from "./BulkAddAttendanceModal"
 import { toast } from "sonner"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Progress } from "@/components/ui/progress"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { format, parseISO, isValid, addDays, subDays } from "date-fns"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Checkbox } from "@/components/ui/checkbox"
 import { debounce } from "lodash"
+import BulkDeleteAttendanceModal from "./BulkDeleteAttendanceModal"
 
 interface Attendance {
   id: number
@@ -97,6 +90,7 @@ interface AttendanceIndexProps {
       active: boolean
     }[]
   }
+  allAttendances?: Attendance[]
   employees?: Employee[]
   payrollPeriods?: PayrollPeriod[]
 }
@@ -168,6 +162,7 @@ const SimpleChart = ({ data, labels, color = "#4f46e5" }) => {
 
 const AttendanceIndex = ({
   attendances = { data: [], current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null, links: [] },
+  allAttendances = [],
   employees = [],
   payrollPeriods = [],
 }: AttendanceIndexProps) => {
@@ -198,6 +193,7 @@ const AttendanceIndex = ({
   const [draggedAttendance, setDraggedAttendance] = useState(null)
   const [debugInfo, setDebugInfo] = useState<string>("")
   const [overwriteExisting, setOverwriteExisting] = useState(false)
+  const [isBulkDeleteModalOpen, setIsBulkDeleteModalOpen] = useState(false)
 
   // New state for period view
   const [selectedPeriodForView, setSelectedPeriodForView] = useState<string>("")
@@ -229,6 +225,131 @@ const AttendanceIndex = ({
     }
   })
   const [periodDateFilter, setPeriodDateFilter] = useState<string>("")
+
+  // Add these state variables near the top of the component with other state declarations
+  const [staticWeeklyCompletion, setStaticWeeklyCompletion] = useState<number | null>(null)
+  const [staticNextPayrollDate, setStaticNextPayrollDate] = useState<string | null>(null)
+
+  // Add a new state variable for the current week date range
+  const [currentWeekDateRange, setCurrentWeekDateRange] = useState<string>("")
+
+  // Add this useEffect at the beginning of the component, right after the state declarations
+  // This will ensure the weekly progress is calculated immediately when the component mounts
+  useEffect(() => {
+    // Calculate the current week date range
+    const today = new Date()
+    const newStartOfWeek = new Date(today)
+    const newDay = newStartOfWeek.getDay()
+    const newDiff = newStartOfWeek.getDate() - newDay + (newDay === 0 ? -6 : 1)
+    newStartOfWeek.setDate(newDiff)
+    newStartOfWeek.setHours(0, 0, 0, 0)
+
+    // Calculate the end of the week (Sunday)
+    const endOfWeek = new Date(newStartOfWeek)
+    endOfWeek.setDate(newStartOfWeek.getDate() + 6)
+
+    // Format the date range for display
+    const startDateFormatted = format(newStartOfWeek, "MMM d")
+    const endDateFormatted = format(endOfWeek, "MMM d, yyyy")
+    const weekRangeText = `${startDateFormatted} - ${endDateFormatted}`
+
+    // Set the week date range immediately
+    setCurrentWeekDateRange(weekRangeText)
+
+    // Calculate weekly completion immediately
+    const completion = calculateWeeklyCompletionImmediate()
+    if (staticWeeklyCompletion === null) {
+      setStaticWeeklyCompletion(completion)
+    }
+
+    // Calculate next payroll date immediately
+    if (staticNextPayrollDate === null) {
+      setStaticNextPayrollDate(getNextPayrollDate())
+    }
+  }, [])
+
+  // Add this function to calculate weekly completion immediately without depending on attendanceByDate
+  const calculateWeeklyCompletionImmediate = () => {
+    // Get current date
+    const today = new Date()
+
+    // Calculate the start of the current week (Monday)
+    const newStartOfWeek = new Date(today)
+    const newDay = newStartOfWeek.getDay()
+    const newDiff = newStartOfWeek.getDate() - newDay + (newDay === 0 ? -6 : 1)
+    newStartOfWeek.setDate(newDiff)
+    newStartOfWeek.setHours(0, 0, 0, 0)
+
+    // Calculate the end of the week (Sunday)
+    const endOfWeek = new Date(newStartOfWeek)
+    endOfWeek.setDate(newStartOfWeek.getDate() + 6)
+
+    // Count days with attendance records
+    let daysWithRecords = 0
+    const currentDay = new Date(newStartOfWeek)
+
+    // Use allAttendances instead of attendanceData to get all records across all pages
+    const dataToUse = allAttendances.length > 0 ? allAttendances : attendanceData
+
+    while (currentDay <= endOfWeek) {
+      const dateString = currentDay.toISOString().split("T")[0]
+      // Check if there are any attendance records for this date
+      const hasRecordsForDate = dataToUse.some((a) => a.work_date === dateString || a.date === dateString)
+      if (hasRecordsForDate) {
+        daysWithRecords++
+      }
+      currentDay.setDate(currentDay.getDate() + 1)
+    }
+
+    // Calculate percentage (out of 7 days)
+    return Math.round((daysWithRecords / 7) * 100)
+  }
+
+  // Use the date from URL params if available, otherwise use today's date
+  useEffect(() => {
+    // Get date from URL if it exists
+    const urlParams = new URLSearchParams(window.location.search)
+    const dateParam = urlParams.get("summaryDate")
+
+    if (dateParam) {
+      setSummaryDateFilter(dateParam)
+    }
+  }, [])
+
+  // Add this effect to initialize the static values from URL parameters
+  useEffect(() => {
+    // Get date and weekly completion from URL if they exist
+    const urlParams = new URLSearchParams(window.location.search)
+    const dateParam = urlParams.get("summaryDate")
+    const weeklyCompletionParam = urlParams.get("weeklyCompletion")
+    const nextPayrollDateParam = urlParams.get("nextPayrollDate")
+    const weekDateRangeParam = urlParams.get("weekDateRange")
+
+    if (dateParam) {
+      setSummaryDateFilter(dateParam)
+    }
+
+    // Calculate the weekly completion if not in URL or if it's 0
+    const calculatedCompletion = calculateWeeklyCompletion()
+
+    if (weeklyCompletionParam && Number.parseInt(weeklyCompletionParam) > 0) {
+      setStaticWeeklyCompletion(Number.parseInt(weeklyCompletionParam))
+    } else {
+      // Initialize with current calculation if not in URL or if it's 0
+      setStaticWeeklyCompletion(calculatedCompletion > 0 ? calculatedCompletion : null)
+    }
+
+    if (nextPayrollDateParam) {
+      setStaticNextPayrollDate(decodeURIComponent(nextPayrollDateParam))
+    } else {
+      // Initialize with current calculation if not in URL
+      setStaticNextPayrollDate(getNextPayrollDate())
+    }
+
+    if (weekDateRangeParam) {
+      setCurrentWeekDateRange(decodeURIComponent(weekDateRangeParam))
+    }
+  }, [])
 
   // Use actual data
   const attendanceData = attendances.data || []
@@ -310,6 +431,8 @@ const AttendanceIndex = ({
 
   const openBulkAddModal = () => setIsBulkAddModalOpen(true)
   const closeBulkAddModal = () => setIsBulkAddModalOpen(false)
+  const openBulkDeleteModal = () => setIsBulkDeleteModalOpen(true)
+  const closeBulkDeleteModal = () => setIsBulkDeleteModalOpen(false)
 
   // Format date for display
   const formatDate = (dateString: string) => {
@@ -527,10 +650,38 @@ const AttendanceIndex = ({
     setShowEditDialog(false)
   }
 
-  // Handle bulk update
+  // Handle bulk update with validation
   const handleBulkUpdate = () => {
-    if (!bulkDate || !bulkStatus) {
-      toast.error("Please select a date and status")
+    // Validate date
+    if (!bulkDate) {
+      toast.error("Please select a date")
+      return
+    }
+
+    // Validate date is not in the future
+    const selectedDate = new Date(bulkDate)
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+
+    if (selectedDate > today) {
+      toast.error("Cannot set attendance for future dates")
+      return
+    }
+
+    // Validate status
+    if (!bulkStatus) {
+      toast.error("Please select a status")
+      return
+    }
+
+    // Confirm before updating
+    const employeeText = selectedEmployeeForView !== "all" ? "the selected employee" : "all employees"
+
+    if (
+      !confirm(
+        `Are you sure you want to update attendance status to "${bulkStatus}" for ${employeeText} on ${bulkDate}?`,
+      )
+    ) {
       return
     }
 
@@ -549,7 +700,13 @@ const AttendanceIndex = ({
           refreshData()
         },
         onError: (errors) => {
-          toast.error("Failed to update attendance records")
+          if (typeof errors === "object" && errors !== null) {
+            Object.values(errors).forEach((message) => {
+              toast.error(`Error: ${message}`)
+            })
+          } else {
+            toast.error("Failed to update attendance records")
+          }
           console.error(errors)
         },
       },
@@ -744,14 +901,6 @@ const AttendanceIndex = ({
       })
   }, [attendances.data, searchTerm, statusFilter, dateFilter, sortField, sortDirection])
 
-  // Pagination
-  // const paginatedAttendances = useMemo(() => {
-  //   const startIndex = (currentPage - 1) * itemsPerPage
-  //   return filteredAttendances.slice(startIndex, startIndex + itemsPerPage)
-  // }, [filteredAttendances, currentPage, itemsPerPage])
-
-  // const totalPages = Math.ceil(filteredAttendances.length / itemsPerPage)
-
   // Toggle sort
   const toggleSort = (field: string) => {
     if (sortField === field) {
@@ -796,12 +945,34 @@ const AttendanceIndex = ({
     router.get("/attendance", {}, { preserveScroll: true })
   }
 
+  // Modify the refreshData function to preserve the static values
   const refreshData = () => {
     setIsRefreshing(true)
+
+    // Save current values before refresh
+    const calculatedCompletion = calculateWeeklyCompletion()
+    const currentWeeklyCompletion = staticWeeklyCompletion || calculatedCompletion
+    const currentNextPayrollDate = staticNextPayrollDate || getNextPayrollDate()
+    const weekDateRange = currentWeekDateRange
+
+    // Update URL with all static values
+    const url = new URL(window.location)
+    if (summaryDateFilter) {
+      url.searchParams.set("summaryDate", summaryDateFilter)
+    }
+    url.searchParams.set("weeklyCompletion", currentWeeklyCompletion.toString())
+    url.searchParams.set("nextPayrollDate", encodeURIComponent(currentNextPayrollDate))
+    url.searchParams.set("weekDateRange", encodeURIComponent(weekDateRange))
+    window.history.pushState({}, "", url)
+
     router.reload({
-      preserveScroll: true, // Add this to prevent scrolling to top
+      preserveScroll: true,
       onSuccess: () => {
         setIsRefreshing(false)
+        // Restore static values after refresh
+        setStaticWeeklyCompletion(currentWeeklyCompletion)
+        setStaticNextPayrollDate(currentNextPayrollDate)
+        setCurrentWeekDateRange(weekDateRange)
       },
       onError: () => {
         setIsRefreshing(false)
@@ -812,10 +983,11 @@ const AttendanceIndex = ({
 
   // Update the calculateSummary function to include all status types
   const calculateSummary = () => {
+    // Use allAttendances prop when available, otherwise fall back to the current page data
+    const dataToUse = allAttendances.length > 0 ? allAttendances : attendanceData
+
     // Filter attendance records by the selected date if a date is selected
-    const filteredByDate = summaryDateFilter
-      ? attendanceData.filter((a) => a.work_date === summaryDateFilter)
-      : attendanceData
+    const filteredByDate = summaryDateFilter ? dataToUse.filter((a) => a.work_date === summaryDateFilter) : dataToUse
 
     let totalDailyRate = 0
     let totalAdjustments = 0
@@ -833,6 +1005,13 @@ const AttendanceIndex = ({
       totalPayAmount += payAmount
     })
 
+    // Calculate today's attendance counts
+    const today = new Date().toISOString().split("T")[0]
+    const todayRecords = dataToUse.filter((a) => a.work_date === today)
+    const todayPresentCount = todayRecords.filter((a) => a.status === "Present").length
+    const todayAbsentCount = todayRecords.filter((a) => a.status === "Absent").length
+    const todayTotal = todayRecords.length
+
     return {
       totalRecords: filteredByDate.length,
       presentCount: filteredByDate.filter((a) => a.status === "Present").length,
@@ -846,6 +1025,9 @@ const AttendanceIndex = ({
       totalDailyRate: totalDailyRate,
       totalAdjustments: totalAdjustments,
       totalPayAmount: totalPayAmount,
+      todayPresentCount: todayPresentCount,
+      todayAbsentCount,
+      todayTotal: todayTotal,
     }
   }
 
@@ -881,7 +1063,7 @@ const AttendanceIndex = ({
     return filtered
   }, [attendanceByDate, dailyViewDateFilter])
 
-  // Calculate weekly attendance completion
+  // Modify the calculateWeeklyCompletion function to also set the current week date range
   const calculateWeeklyCompletion = () => {
     // Get current date
     const today = new Date()
@@ -901,13 +1083,26 @@ const AttendanceIndex = ({
     const endOfWeek = new Date(newStartOfWeek)
     endOfWeek.setDate(newStartOfWeek.getDate() + 6)
 
+    // Format the date range for display
+    const startDateFormatted = format(newStartOfWeek, "MMM d")
+    const endDateFormatted = format(endOfWeek, "MMM d, yyyy")
+    const weekRangeText = `${startDateFormatted} - ${endDateFormatted}`
+
+    // Remove or comment out this line in the calculateWeeklyCompletion function
+    // setCurrentWeekDateRange(weekRangeText)
+
+    // Use allAttendances instead of attendanceByDate to get all records across all pages
+    const dataToUse = allAttendances.length > 0 ? allAttendances : attendanceData
+
     // Count days with attendance records
     let daysWithRecords = 0
     const currentDay = new Date(newStartOfWeek)
 
     while (currentDay <= endOfWeek) {
       const dateString = currentDay.toISOString().split("T")[0]
-      if (Object.keys(attendanceByDate).includes(dateString)) {
+      // Check if there are any attendance records for this date
+      const hasRecordsForDate = dataToUse.some((a) => a.work_date === dateString || a.date === dateString)
+      if (hasRecordsForDate) {
         daysWithRecords++
       }
       currentDay.setDate(currentDay.getDate() + 1)
@@ -916,6 +1111,8 @@ const AttendanceIndex = ({
     // Calculate percentage (out of 7 days)
     return Math.round((daysWithRecords / 7) * 100)
   }
+
+  // Add this useEffect after the other useEffect hooks
 
   // Get next payroll date
   const getNextPayrollDate = () => {
@@ -1043,6 +1240,30 @@ const AttendanceIndex = ({
     addRecord(0)
   }
 
+  // Modify the setSummaryDateFilter function to update URL when date changes
+  const updateSummaryDateFilter = (date) => {
+    setSummaryDateFilter(date)
+
+    // Update URL with the new date parameter without reloading the page
+    const url = new URL(window.location)
+    if (date) {
+      url.searchParams.set("summaryDate", date)
+    } else {
+      url.searchParams.delete("summaryDate")
+    }
+
+    // Preserve weekly completion and next payroll date
+    const calculatedCompletion = calculateWeeklyCompletion()
+    const currentWeeklyCompletion = staticWeeklyCompletion || calculatedCompletion
+    const currentNextPayrollDate = staticNextPayrollDate || getNextPayrollDate()
+
+    url.searchParams.set("weeklyCompletion", currentWeeklyCompletion.toString())
+    url.searchParams.set("nextPayrollDate", encodeURIComponent(currentNextPayrollDate))
+    url.searchParams.set("weekDateRange", encodeURIComponent(currentWeekDateRange))
+
+    window.history.pushState({}, "", url)
+  }
+
   return (
     <AppLayout
       breadcrumbs={[
@@ -1080,14 +1301,7 @@ const AttendanceIndex = ({
               <Calendar className="h-4 w-4 mr-1" />
               Bulk Update
             </Button>
-            <Button
-              variant="outline"
-              onClick={() => setShowGeneratePayrollDialog(true)}
-              className="border-green-200 text-green-600 hover:border-green-300 dark:border-green-800 dark:text-green-400 dark:hover:border-green-700"
-            >
-              <Wallet className="h-4 w-4 mr-1" />
-              Generate Payroll
-            </Button>
+            {/* Generate Payroll button removed */}
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -1117,10 +1331,16 @@ const AttendanceIndex = ({
                 <TooltipContent>Refresh Data</TooltipContent>
               </Tooltip>
             </TooltipProvider>
+            <Button
+              variant="outline"
+              onClick={openBulkDeleteModal}
+              className="border-red-200 text-red-600 hover:border-red-300 dark:border-red-800 dark:text-red-400 dark:hover:border-red-700"
+            >
+              <Trash2 className="h-4 w-4 mr-1" />
+              Bulk Delete
+            </Button>
           </div>
         </div>
-
-
 
         {/* Weekly Attendance Progress */}
         <Card className="p-5 border border-slate-200 dark:border-slate-700 mb-6">
@@ -1128,19 +1348,23 @@ const AttendanceIndex = ({
             <div>
               <h2 className="text-lg font-semibold mb-1">Weekly Attendance Progress</h2>
               <p className="text-slate-600 dark:text-slate-400">
-                {calculateWeeklyCompletion()}% complete for current week
+                {staticWeeklyCompletion !== null ? staticWeeklyCompletion : calculateWeeklyCompletion()}% complete for
+                current week
+                {currentWeekDateRange && <span className="ml-1">({currentWeekDateRange})</span>}
               </p>
             </div>
             <div className="mt-4 md:mt-0">
               <p className="text-sm text-slate-600 dark:text-slate-400">
                 Next payroll date:{" "}
-                <span className="font-medium text-indigo-600 dark:text-indigo-400">{getNextPayrollDate()}</span>
+                <span className="font-medium text-indigo-600 dark:text-indigo-400">
+                  {staticNextPayrollDate || getNextPayrollDate()}
+                </span>
               </p>
             </div>
           </div>
           <div className="mt-4">
             <Progress
-              value={calculateWeeklyCompletion()}
+              value={staticWeeklyCompletion !== null ? staticWeeklyCompletion : calculateWeeklyCompletion()}
               className="h-2 bg-slate-100 dark:bg-slate-700"
               indicatorClassName="bg-indigo-500"
             />
@@ -1686,20 +1910,40 @@ const AttendanceIndex = ({
                       Showing {attendances.from || 0} to {attendances.to || 0} of {attendances.total} entries
                     </div>
                     <div className="flex items-center space-x-2">
-                      {attendances.links.map((link, i) => (
-                        <Button
-                          key={i}
-                          variant={link.active ? "default" : "outline"}
-                          size="sm"
-                          onClick={() => {
-                            if (link.url) {
-                              router.get(link.url, {}, { preserveScroll: true })
-                            }
-                          }}
-                          disabled={!link.url}
-                          dangerouslySetInnerHTML={{ __html: link.label }}
-                        />
-                      ))}
+                      {attendances.links.map((link, i) => {
+                        // Create a new URL with the current parameters
+                        const url = link.url ? new URL(link.url, window.location.origin) : null
+
+                        // If we have a URL, add all our static parameters
+                        if (url) {
+                          if (summaryDateFilter) {
+                            url.searchParams.set("summaryDate", summaryDateFilter)
+                          }
+
+                          const calculatedCompletion = calculateWeeklyCompletion()
+                          const currentWeeklyCompletion = staticWeeklyCompletion || calculatedCompletion
+                          const currentNextPayrollDate = staticNextPayrollDate || getNextPayrollDate()
+
+                          url.searchParams.set("weeklyCompletion", currentWeeklyCompletion.toString())
+                          url.searchParams.set("nextPayrollDate", encodeURIComponent(currentNextPayrollDate))
+                          url.searchParams.set("weekDateRange", encodeURIComponent(currentWeekDateRange))
+                        }
+
+                        return (
+                          <Button
+                            key={i}
+                            variant={link.active ? "default" : "outline"}
+                            size="sm"
+                            onClick={() => {
+                              if (url) {
+                                router.get(url.toString(), {}, { preserveScroll: true })
+                              }
+                            }}
+                            disabled={!url}
+                            dangerouslySetInnerHTML={{ __html: link.label }}
+                          />
+                        )
+                      })}
                     </div>
                   </div>
                 )}
@@ -2040,13 +2284,13 @@ const AttendanceIndex = ({
                       id="summary-date"
                       type="date"
                       value={summaryDateFilter}
-                      onChange={(e) => setSummaryDateFilter(e.target.value)}
+                      onChange={(e) => updateSummaryDateFilter(e.target.value)}
                       className="w-auto"
                     />
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => setSummaryDateFilter(new Date().toISOString().split("T")[0])}
+                      onClick={() => updateSummaryDateFilter(new Date().toISOString().split("T")[0])}
                       className="whitespace-nowrap"
                     >
                       <Calendar className="h-4 w-4 mr-1" />
@@ -2055,7 +2299,7 @@ const AttendanceIndex = ({
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => setSummaryDateFilter("")}
+                      onClick={() => updateSummaryDateFilter("")}
                       className="whitespace-nowrap"
                     >
                       <Filter className="h-4 w-4 mr-1" />
@@ -2383,24 +2627,17 @@ const AttendanceIndex = ({
                   <div className="mt-4">
                     <div className="flex justify-between mb-1">
                       <span className="text-sm text-slate-500 dark:text-slate-400">Weekly Completion</span>
-                      <span className="text-sm font-medium">{calculateWeeklyCompletion()}%</span>
+                      <span className="text-sm font-medium">
+                        {staticWeeklyCompletion !== null ? staticWeeklyCompletion : calculateWeeklyCompletion()}%
+                      </span>
                     </div>
                     <Progress
-                      value={calculateWeeklyCompletion()}
+                      value={staticWeeklyCompletion !== null ? staticWeeklyCompletion : calculateWeeklyCompletion()}
                       className="h-2 bg-slate-100 dark:bg-slate-700"
                       indicatorClassName="bg-indigo-500"
                     />
                   </div>
-                  <div className="mt-4">
-                    <Button
-                      variant="outline"
-                      onClick={() => setShowGeneratePayrollDialog(true)}
-                      className="w-full border-indigo-200 text-indigo-600 hover:border-indigo-300 dark:border-indigo-800 dark:text-indigo-400 dark:hover:border-indigo-700"
-                    >
-                      <Wallet className="h-4 w-4 mr-1" />
-                      Generate Payroll
-                    </Button>
-                  </div>
+                  {/* Generate Payroll button removed */}
                 </div>
               </Card>
             </div>
@@ -2429,72 +2666,6 @@ const AttendanceIndex = ({
         )}
 
         {/* Generate Payroll Dialog */}
-
-        <Dialog open={showGeneratePayrollDialog} onOpenChange={setShowGeneratePayrollDialog}>
-          <DialogContent className="sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle>Generate Payroll from Attendance</DialogTitle>
-              <DialogDescription>
-                Select a payroll period to generate payroll entries from attendance records.
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="grid gap-4 py-4">
-              <div className="grid gap-2">
-                <label htmlFor="payroll-period" className="text-sm font-medium">
-                  Payroll Period
-                </label>
-                <select
-                  id="payroll-period"
-                  value={selectedPayrollPeriod}
-                  onChange={(e) => setSelectedPayrollPeriod(e.target.value)}
-                  className="p-2 border rounded bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400"
-                >
-                  <option value="">Select a period</option>
-                  {payrollPeriods.map((period) => (
-                    <option key={period.id} value={period.id}>
-                      {period.week_id && `Week ID: ${period.week_id} - `}
-                      {new Date(period.period_start).toLocaleDateString()} -{" "}
-                      {new Date(period.period_end).toLocaleDateString()}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="flex items-center space-x-2">
-                <Checkbox id="overwrite-existing" checked={overwriteExisting} onCheckedChange={setOverwriteExisting} />
-                <label
-                  htmlFor="overwrite-existing"
-                  className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
-                >
-                  Overwrite existing payroll records for this period
-                </label>
-              </div>
-
-              <Alert variant="info" className="mt-2">
-                <AlertCircle className="h-4 w-4" />
-                <AlertTitle>Important</AlertTitle>
-                <AlertDescription>
-                  This will generate payroll entries based on the attendance records for the selected period. Daily
-                  rates and statuses from attendance records will be respected when calculating pay.
-                </AlertDescription>
-              </Alert>
-            </div>
-
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setShowGeneratePayrollDialog(false)}>
-                Cancel
-              </Button>
-              <Button
-                onClick={handleGeneratePayroll}
-                disabled={!selectedPayrollPeriod || isGeneratingPayroll}
-                className="bg-green-600 hover:bg-green-700 text-white"
-              >
-                {isGeneratingPayroll ? "Generating..." : "Generate Payroll"}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
 
         {/* Edit Attendance Dialog */}
         <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
@@ -2672,6 +2843,7 @@ const AttendanceIndex = ({
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        {isBulkDeleteModalOpen && <BulkDeleteAttendanceModal onClose={closeBulkDeleteModal} employees={employees} />}
       </div>
     </AppLayout>
   )

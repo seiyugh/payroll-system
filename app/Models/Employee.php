@@ -5,14 +5,16 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Employee extends Model
 {
     use HasFactory;
 
-    protected $primaryKey = 'employee_number';
-    protected $keyType = 'string';
-    public $incrementing = false;
+    // Comment out or remove these lines as they don't match your database structure
+    // protected $primaryKey = 'employee_number';
+    // protected $keyType = 'string';
+    // public $incrementing = false;
 
     protected $fillable = [
         'employee_number',

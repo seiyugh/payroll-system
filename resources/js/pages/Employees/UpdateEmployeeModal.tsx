@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { User, Briefcase, FileText, Phone, X, CalendarDays, MapPin, Users } from "lucide-react"
+import { User, Briefcase, FileText, Phone, CalendarDays, MapPin, Users } from "lucide-react"
 
 interface Employee {
   id: number
@@ -86,6 +86,8 @@ const UpdateEmployeeModal = ({ employee, onClose }: UpdateEmployeeModalProps) =>
     setIsSubmitting(true)
     setErrors({})
 
+    console.log("Submitting update for employee ID:", formData.id, "with employee number:", formData.employee_number)
+
     router.put(`/employees/${formData.id}`, formData, {
       onSuccess: () => {
         toast.success("Employee updated successfully!")
@@ -148,10 +150,9 @@ const UpdateEmployeeModal = ({ employee, onClose }: UpdateEmployeeModalProps) =>
 
   return (
     <Dialog open={true} onOpenChange={onClose}>
-      <DialogContent className="!w-max !h-max !max-w-[110vw] !max-h-[90vh] overflow-y-auto" >
+      <DialogContent className="!w-max !h-max !max-w-[110vw] !max-h-[90vh] overflow-y-auto">
         <DialogHeader className="flex flex-row items-center justify-between">
           <DialogTitle className="text-xl font-semibold">Edit Employee: {formData.full_name}</DialogTitle>
-
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-6">

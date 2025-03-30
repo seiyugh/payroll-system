@@ -15,59 +15,74 @@ use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 class AttendanceController extends Controller
 {
     public function index(Request $request)
-{
-    // Set default date to today if no date filter is provided
-    $date = $request->date ?: date('Y-m-d');
-    
-    $query = DB::table('attendance')
-        ->select(
-            'attendance.id',
-            'attendance.employee_number',
-            'attendance.work_date',
-            'attendance.daily_rate',
-            'attendance.adjustment',
-            'attendance.status',
-            'employees.full_name'
-        )
-        ->leftJoin('employees', 'attendance.employee_number', '=', 'employees.employee_number');
-    
-    // Apply search filter
-    if ($request->has('search') && !empty($request->search)) {
-        $search = $request->search;
-        $query->where(function($q) use ($search) {
-            $q->where('attendance.employee_number', 'like', "%{$search}%")
-              ->orWhere('employees.full_name', 'like', "%{$search}%");
-        });
-    }
-    
-    // Apply status filter
-    if ($request->has('status') && !empty($request->status)) {
-        $query->where('attendance.status', $request->status);
-    }
-    
-    // Apply date filter - only if explicitly provided in the request
-    if ($request->has('date')) {
-        if (!empty($request->date)) {
-            $query->where('attendance.work_date', $request->date);
+    {
+        // Set default date to today if no date filter is provided
+        $date = $request->date ?: date('Y-m-d');
+        
+        $query = DB::table('attendance')
+            ->select(
+                'attendance.id',
+                'attendance.employee_number',
+                'attendance.work_date',
+                'attendance.daily_rate',
+                'attendance.adjustment',
+                'attendance.status',
+                'employees.full_name'
+            )
+            ->leftJoin('employees', 'attendance.employee_number', '=', 'employees.employee_number');
+        
+        // Apply search filter
+        if ($request->has('search') && !empty($request->search)) {
+            $search = $request->search;
+            $query->where(function($q) use ($search) {
+                $q->where('attendance.employee_number', 'like', "%{$search}%")
+                  ->orWhere('employees.full_name', 'like', "%{$search}%");
+            });
         }
-    }
-    
-    // Apply sorting
-    $query->orderBy('attendance.work_date', 'desc');
-    
-    // Get paginated results
-    $attendances = $query->paginate(15)->withQueryString();
-    
-    $employees = Employee::select('id', 'employee_number', 'full_name', 'daily_rate')->get();
-    $payrollPeriods = DB::table('payroll_periods')->get();
+        
+        // Apply status filter
+        if ($request->has('status') && !empty($request->status)) {
+            $query->where('attendance.status', $request->status);
+        }
+        
+        // Apply date filter - only if explicitly provided in the request
+        if ($request->has('date')) {
+            if (!empty($request->date)) {
+                $query->where('attendance.work_date', $request->date);
+            }
+        }
+        
+        // Apply sorting
+        $query->orderBy('attendance.work_date', 'desc');
+        
+        // Get paginated results
+        $attendances = $query->paginate(15)->withQueryString();
 
-    return Inertia::render('Attendance/Index', [
-        'attendances' => $attendances,
-        'employees' => $employees,
-        'payrollPeriods' => $payrollPeriods,
-        'filters' => $request->only(['search', 'status', 'date']),
-    ]);
-}
+        // Fetch all attendance records for summary calculations
+        $allAttendances = DB::table('attendance')
+            ->select(
+                'attendance.id',
+                'attendance.employee_number',
+                'attendance.work_date',
+                'attendance.daily_rate',
+                'attendance.adjustment',
+                'attendance.status',
+                'employees.full_name'
+            )
+            ->leftJoin('employees', 'attendance.employee_number', '=', 'employees.employee_number')
+            ->get();
+        
+        $employees = Employee::select('id', 'employee_number', 'full_name', 'daily_rate')->get();
+        $payrollPeriods = DB::table('payroll_periods')->get();
+
+        return Inertia::render('Attendance/Index', [
+            'attendances' => $attendances,
+            'allAttendances' => $allAttendances, // Pass all attendance records
+            'employees' => $employees,
+            'payrollPeriods' => $payrollPeriods,
+            'filters' => $request->only(['search', 'status', 'date']),
+        ]);
+    }
 
     public function create()
     {
@@ -87,6 +102,18 @@ class AttendanceController extends Controller
             'adjustment' => 'nullable|numeric',
             'status' => 'required|string',
         ]);
+
+        // Check if attendance record already exists
+        $exists = DB::table('attendance')
+            ->where('employee_number', $validated['employee_number'])
+            ->where('work_date', $validated['work_date'])
+            ->exists();
+
+        if ($exists) {
+            return redirect()->back()->withErrors([
+                'duplicate' => 'An attendance record already exists for this employee on this date.'
+            ]);
+        }
 
         DB::table('attendance')->insert($validated);
 
@@ -162,6 +189,21 @@ class AttendanceController extends Controller
             return redirect()->route('attendance.index')->with('error', 'Attendance record not found');
         }
 
+        // Check if we're changing the date and if a record already exists for that date
+        if ($attendance->work_date != $validated['work_date']) {
+            $exists = DB::table('attendance')
+                ->where('employee_number', $validated['employee_number'])
+                ->where('work_date', $validated['work_date'])
+                ->where('id', '!=', $id)
+                ->exists();
+
+            if ($exists) {
+                return redirect()->back()->withErrors([
+                    'duplicate' => 'An attendance record already exists for this employee on this date.'
+                ]);
+            }
+        }
+
         DB::table('attendance')->where('id', $id)->update($validated);
 
         return redirect()->back()->with('success', 'Attendance record updated successfully');
@@ -187,6 +229,34 @@ class AttendanceController extends Controller
             'employee_numbers' => 'required|array',
             'status' => 'required|string',
         ]);
+
+        // Check for existing records
+        $existingEmployees = DB::table('attendance')
+            ->where('work_date', $validated['work_date'])
+            ->whereIn('employee_number', $validated['employee_numbers'])
+            ->pluck('employee_number')
+            ->toArray();
+
+        if (count($existingEmployees) > 0) {
+            // If all employees already have records
+            if (count($existingEmployees) == count($validated['employee_numbers'])) {
+                return redirect()->back()->withErrors([
+                    'duplicate' => 'All selected employees already have attendance records for this date.'
+                ]);
+            }
+
+            // Filter out employees that already have records
+            $filteredEmployeeNumbers = array_diff($validated['employee_numbers'], $existingEmployees);
+            
+            // If user wants to proceed with remaining employees, they should confirm
+            if (empty($filteredEmployeeNumbers)) {
+                return redirect()->back()->withErrors([
+                    'duplicate' => 'All selected employees already have attendance records for this date.'
+                ]);
+            }
+            
+            $validated['employee_numbers'] = $filteredEmployeeNumbers;
+        }
 
         $records = [];
         foreach ($validated['employee_numbers'] as $employeeNumber) {
@@ -407,4 +477,88 @@ class AttendanceController extends Controller
         
         return collect($records);
     }
+
+    /**
+     * Check if an attendance record exists for a specific employee and date
+     */
+    public function checkExisting(Request $request)
+    {
+        $request->validate([
+            'employee_number' => 'required|string',
+            'work_date' => 'required|date',
+            'exclude_id' => 'nullable|integer',
+        ]);
+
+        $query = DB::table('attendance')
+            ->where('employee_number', $request->employee_number)
+            ->where('work_date', $request->work_date);
+
+        // Exclude the current record if updating
+        if ($request->has('exclude_id')) {
+            $query->where('id', '!=', $request->exclude_id);
+        }
+
+        $exists = $query->exists();
+
+        return Inertia::render('Attendance/Index', [
+            'exists' => $exists,
+        ])->withViewData(['exists' => $exists]);
+    }
+
+    /**
+     * Check if attendance records exist for multiple employees on a specific date
+     */
+    public function checkBulkExisting(Request $request)
+    {
+        $request->validate([
+            'employee_numbers' => 'required|array',
+            'work_date' => 'required|date',
+        ]);
+
+        $existingEmployees = DB::table('attendance')
+            ->where('work_date', $request->work_date)
+            ->whereIn('employee_number', $request->employee_numbers)
+            ->pluck('employee_number')
+            ->toArray();
+
+        return Inertia::render('Attendance/Index', [
+            'existingEmployees' => $existingEmployees,
+        ])->withViewData(['existingEmployees' => $existingEmployees]);
+    }
+
+    /**
+     * Bulk delete attendance records
+     */
+    public function bulkDelete(Request $request)
+    {
+        if ($request->has('date')) {
+            // Single date deletion
+            $request->validate([
+                'employee_numbers' => 'required|array',
+                'date' => 'required|date',
+            ]);
+
+            $deleted = DB::table('attendance')
+                ->where('work_date', $request->date)
+                ->whereIn('employee_number', $request->employee_numbers)
+                ->delete();
+
+            return redirect()->back()->with('success', $deleted . ' attendance records deleted successfully');
+        } else {
+            // Date range deletion
+            $request->validate([
+                'employee_numbers' => 'required|array',
+                'start_date' => 'required|date',
+                'end_date' => 'required|date',
+            ]);
+
+            $deleted = DB::table('attendance')
+                ->whereBetween('work_date', [$request->start_date, $request->end_date])
+                ->whereIn('employee_number', $request->employee_numbers)
+                ->delete();
+
+            return redirect()->back()->with('success', $deleted . ' attendance records deleted successfully');
+        }
+    }
 }
+
