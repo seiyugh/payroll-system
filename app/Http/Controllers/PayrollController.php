@@ -310,21 +310,25 @@ class PayrollController extends Controller {
   }
 
   // FIXED: Enhanced update method with better error handling and debugging
+  // ENHANCED: This update method ensures all PrintPayslip changes are properly persisted
   public function update(Request $request, $id)
   {
       try {
           DB::beginTransaction();
           
-          // Log the raw request data
+          // Enhanced logging for debugging
           Log::info('Raw payroll update request data for ID ' . $id . ':', $request->all());
           
-          // Find the payroll entry first to ensure it exists
-          $payroll = PayrollEntry::findOrFail($id);
+          // Find the payroll entry first to ensure it exists - using correct relationship name
+          $payroll = PayrollEntry::with('payrollPeriod')->findOrFail($id);
+          
+          // Log the original payroll data before any changes
+          Log::info('Original payroll data before update:', $payroll->toArray());
           
           // Validate the request data
           $validated = $request->validate([
               'employee_number' => 'required|exists:employees,employee_number',
-              'week_id' => 'required|exists:payroll_periods,week_id',
+              'week_id' => 'sometimes|nullable|exists:payroll_periods,week_id',
               'daily_rate' => 'nullable|numeric|min:0',
               'gross_pay' => 'required|numeric|min:0',
               'sss_deduction' => 'required|numeric|min:0',
@@ -338,41 +342,81 @@ class PayrollController extends Controller {
               'short' => 'nullable|numeric|min:0',
               'ytd_earnings' => 'nullable|numeric|min:0',
               'thirteenth_month_pay' => 'nullable|numeric|min:0',
-              'status' => 'required|string|in:generated,approved,paid,pending,rejected,Generated,Approved,Paid,Pending,Rejected',
+              'status' => 'sometimes|required|string|in:generated,approved,paid,pending,rejected,Generated,Approved,Paid,Pending,Rejected',
+              'period_start' => 'sometimes|nullable|date',
+              'period_end' => 'sometimes|nullable|date',
           ]);
-
+  
+          // Handle payroll period dates if provided
+          if ($request->has('period_start') && $request->period_start) {
+              $payrollPeriod = $payroll->payrollPeriod;
+              if ($payrollPeriod) {
+                  Log::info('Updating period_start from ' . $payrollPeriod->period_start . ' to ' . $request->period_start);
+                  $payrollPeriod->period_start = $request->period_start;
+                  $payrollPeriod->save();
+              } else {
+                  Log::warning('Cannot update period_start: payroll period not found for week_id ' . $payroll->week_id);
+              }
+          }
+          
+          if ($request->has('period_end') && $request->period_end) {
+              $payrollPeriod = $payroll->payrollPeriod;
+              if ($payrollPeriod) {
+                  Log::info('Updating period_end from ' . $payrollPeriod->period_end . ' to ' . $request->period_end);
+                  $payrollPeriod->period_end = $request->period_end;
+                  $payrollPeriod->save();
+              } else {
+                  Log::warning('Cannot update period_end: payroll period not found for week_id ' . $payroll->week_id);
+              }
+          }
+  
           // Set default values for nullable fields
-          $validated['cash_advance'] = $validated['cash_advance'] ?? 0;
-          $validated['loan'] = $validated['loan'] ?? 0;
-          $validated['vat'] = $validated['vat'] ?? 0;
-          $validated['other_deductions'] = $validated['other_deductions'] ?? 0;
-          $validated['short'] = $validated['short'] ?? 0;
-          $validated['ytd_earnings'] = $validated['ytd_earnings'] ?? 0;
-          $validated['thirteenth_month_pay'] = $validated['thirteenth_month_pay'] ?? 0;
-
+          $defaults = [
+              'cash_advance' => 0,
+              'loan' => 0,
+              'vat' => 0,
+              'other_deductions' => 0,
+              'short' => 0,
+              'ytd_earnings' => 0,
+              'thirteenth_month_pay' => 0,
+              'daily_rate' => $payroll->daily_rate, // Preserve existing if not provided
+              'week_id' => $payroll->week_id, // Preserve existing if not provided
+          ];
+  
+          foreach ($defaults as $field => $value) {
+              $validated[$field] = $validated[$field] ?? $value;
+          }
+  
           // Get the employee
           $employee = Employee::where('employee_number', $validated['employee_number'])->first();
-
-          // Only apply short if employee is Allen One - department is a field, not a relationship
-          if (!$employee || $employee->department !== 'Allen One') {
+          
+          if ($employee) {
+              Log::info('Found employee:', $employee->toArray());
+          } else {
+              Log::warning('Employee not found for employee_number: ' . $validated['employee_number']);
+              throw new \Exception('Employee not found');
+          }
+  
+          // Only apply short if employee is Allen One
+          if ($employee->department !== 'Allen One') {
               $validated['short'] = 0; // Force to 0 for non-Allen One employees
           }
-
+  
           // Calculate derived fields
           $totalDeductions = $validated['sss_deduction'] +
-                              $validated['philhealth_deduction'] +
-                              $validated['pagibig_deduction'] +
-                              $validated['tax_deduction'] +
-                              $validated['cash_advance'] +
-                              $validated['loan'] +
-                              $validated['vat'] +
-                              $validated['other_deductions'] +
-                              ($validated['short'] ?? 0);
-
-          $netPay = $validated['gross_pay'] - $totalDeductions;
-
+                            $validated['philhealth_deduction'] +
+                            $validated['pagibig_deduction'] +
+                            $validated['tax_deduction'] +
+                            $validated['cash_advance'] +
+                            $validated['loan'] +
+                            $validated['vat'] +
+                            $validated['other_deductions'] +
+                            $validated['short'];
+  
+          // Remove net_pay from validated data since it's a generated column
+          unset($validated['net_pay']);
+          
           $validated['total_deductions'] = $totalDeductions;
-          $validated['net_pay'] = $netPay;
           
           // Log the data before update
           Log::info('Before update', [
@@ -380,33 +424,52 @@ class PayrollController extends Controller {
               'validated_data' => $validated,
               'original_data' => $payroll->toArray()
           ]);
-
-          Log::info('About to update PayrollEntry ID ' . $id . ' with data:', [
+  
+          // Update payroll fields - EXCLUDE net_pay since it's generated
+          $payroll->fill([
               'employee_number' => $validated['employee_number'],
               'week_id' => $validated['week_id'],
+              'daily_rate' => $validated['daily_rate'],
               'gross_pay' => $validated['gross_pay'],
-              'net_pay' => $validated['net_pay'],
+              'sss_deduction' => $validated['sss_deduction'],
+              'philhealth_deduction' => $validated['philhealth_deduction'],
+              'pagibig_deduction' => $validated['pagibig_deduction'],
+              'tax_deduction' => $validated['tax_deduction'],
+              'cash_advance' => $validated['cash_advance'],
+              'loan' => $validated['loan'],
+              'vat' => $validated['vat'],
+              'other_deductions' => $validated['other_deductions'],
+              'short' => $validated['short'],
+              'ytd_earnings' => $validated['ytd_earnings'],
+              'thirteenth_month_pay' => $validated['thirteenth_month_pay'],
               'total_deductions' => $validated['total_deductions'],
-              'status' => $validated['status']
+              'status' => $validated['status'] ?? $payroll->status,
           ]);
-
-          // Update only non-generated columns
-          $payroll->employee_number = $validated['employee_number'];
-          $payroll->week_id = $validated['week_id'];
-          $payroll->daily_rate = $validated['daily_rate'] ?? null;
-          $payroll->gross_pay = $validated['gross_pay'];
-          $payroll->sss_deduction = $validated['sss_deduction'];
-          $payroll->philhealth_deduction = $validated['philhealth_deduction'];
-          $payroll->pagibig_deduction = $validated['pagibig_deduction'];
-          $payroll->tax_deduction = $validated['tax_deduction'];
-          $payroll->cash_advance = $validated['cash_advance'] ?? 0;
-          $payroll->loan = $validated['loan'] ?? 0;
-          $payroll->vat = $validated['vat'] ?? 0;
-          $payroll->other_deductions = $validated['other_deductions'] ?? 0;
-          $payroll->short = $validated['short'] ?? 0;
-          $payroll->ytd_earnings = $validated['ytd_earnings'] ?? 0;
-          $payroll->thirteenth_month_pay = $validated['thirteenth_month_pay'] ?? 0;
-          $payroll->status = $validated['status'];
+          
+          // Update employee details if provided
+          $employeeUpdates = [];
+          if ($request->has('full_name')) {
+              $employeeUpdates['full_name'] = $request->full_name;
+          }
+          if ($request->has('department')) {
+              $employeeUpdates['department'] = $request->department;
+          }
+          if ($request->has('position')) {
+              $employeeUpdates['position'] = $request->position;
+          }
+          
+          if (!empty($employeeUpdates)) {
+              Log::info('Updating employee details:', $employeeUpdates);
+              $employee->update($employeeUpdates);
+          }
+          
+          // Update gross pay based on attendance if needed
+          if ($request->input('update_gross_pay', true)) {
+              $grossPayResult = $this->updateGrossPayFromAttendance($id);
+              if ($grossPayResult['success']) {
+                  $payroll->gross_pay = $grossPayResult['payroll']->gross_pay;
+              }
+          }
           
           // Save the changes
           $saved = $payroll->save();
@@ -414,7 +477,7 @@ class PayrollController extends Controller {
           if (!$saved) {
               throw new \Exception('Failed to save updated payroll entry');
           }
-
+  
           // Log the result
           Log::info('Update result', [
               'saved' => $saved,
@@ -422,31 +485,28 @@ class PayrollController extends Controller {
           ]);
           
           DB::commit();
-
-          if ($request->wantsJson()) {
-              return response()->json([
+  
+          return $request->wantsJson()
+              ? response()->json([
                   'success' => true,
                   'message' => 'Payroll updated successfully!',
                   'payroll' => $payroll->fresh()
-              ]);
-          }
-
-          return redirect()->back()->with('success', 'Payroll updated successfully!');
+                ])
+              : redirect()->back()->with('success', 'Payroll updated successfully!');
       } catch (\Exception $e) {
           DB::rollBack();
           Log::error('Error updating payroll: ' . $e->getMessage());
           Log::error('Stack trace: ' . $e->getTraceAsString());
           
-          if ($request->wantsJson()) {
-              return response()->json([
+          return $request->wantsJson()
+              ? response()->json([
                   'success' => false,
                   'message' => 'Failed to update payroll: ' . $e->getMessage()
-              ], 500);
-          }
-          
-          return back()->with('error', 'Failed to update payroll: ' . $e->getMessage());
+                ], 500)
+              : back()->with('error', 'Failed to update payroll: ' . $e->getMessage());
       }
   }
+
 
   // FIXED: Enhanced generatePayroll method with better error handling and debugging
   public function generatePayroll(Request $request)
@@ -521,14 +581,28 @@ class PayrollController extends Controller {
                     $amount = 0;
                     switch (strtolower($status)) {
                         case 'present':
-                            $amount = $dailyRate;
+                            $amount = $dailyRate * 1;
                             break;
                         case 'half day':
                             $amount = $dailyRate / 2;
                             break;
                         case 'absent':
                         case 'day off':
+                        case 'leave':
                             $amount = 0;
+                            break;
+                        case 'holiday':
+                            // Check if it's a regular or special holiday
+                            $holidayType = $record->holiday_type ?? '';
+                            if (str_contains(strtolower($holidayType), 'regular')) {
+                                $amount = $dailyRate * 1.3; // Regular holiday
+                            } else {
+                                $amount = $dailyRate * 2; // Special holiday
+                            }
+                            break;
+                        case 'wfh':
+                        case 'sp':
+                            $amount = $dailyRate * 1;
                             break;
                         default:
                             $amount = $dailyRate;
@@ -780,9 +854,14 @@ class PayrollController extends Controller {
                     $adjustment = $record->adjustment ?? 0;
 
                     $amount = match (strtolower($status)) {
-                        'present' => $dailyRate,
-                        'half day' => $dailyRate / 2,
-                        'absent', 'day off' => 0,
+                        'present' => $dailyRate * 1, // Present * 1
+                        'absent' => $dailyRate * 0, // Absent * 0
+                        'day off' => $dailyRate * 0, // Day Off * 0
+                        'half day' => $dailyRate / 2, // Half Day / 2
+                        'holiday' => str_contains(strtolower($record->holiday_type ?? ''), 'regular') ? $dailyRate * 1.3 : $dailyRate * 2, // Holiday logic
+                        'leave' => $dailyRate * 0, // Leave * 0
+                        'wfh' => $dailyRate * 1, // WFH * 1
+                        'sp' => $dailyRate * 1, // SP * 1
                         default => $dailyRate,
                     };
 
@@ -1317,5 +1396,90 @@ public function calculateTax($grossPay) {
     // Convert annual tax to weekly
     return $tax / 52;
 }
+
+public function updateGrossPayFromAttendance($payrollEntryId)
+{
+    try {
+        DB::beginTransaction();
+        
+        // Find the payroll entry
+        $payroll = PayrollEntry::with('payrollPeriod')->findOrFail($payrollEntryId);
+        $employee = Employee::where('employee_number', $payroll->employee_number)->first();
+        
+        if (!$employee) {
+            throw new \Exception('Employee not found');
+        }
+        
+        if (!$payroll->payrollPeriod) {
+            throw new \Exception('Payroll period not found');
+        }
+        
+        // Get attendance records for this period
+        $attendanceRecords = Attendance::where('employee_number', $payroll->employee_number)
+            ->whereBetween('work_date', [$payroll->payrollPeriod->period_start, $payroll->payrollPeriod->period_end])
+            ->get();
+        
+        // Calculate gross pay based on attendance
+        $grossPay = 0;
+        
+        foreach ($attendanceRecords as $record) {
+            $status = $record->status;
+            $dailyRate = $record->daily_rate ?? $employee->daily_rate ?? 0;
+            $adjustment = $record->adjustment ?? 0;
+            
+            // Calculate pay based on status
+            $amount = match (strtolower($status)) {
+                'present' => $dailyRate * 1, // Present * 1
+                'absent' => $dailyRate * 0, // Absent * 0
+                'day off' => $dailyRate * 0, // Day Off * 0
+                'half day' => $dailyRate / 2, // Half Day / 2
+                'holiday' => str_contains(strtolower($record->holiday_type ?? ''), 'regular') ? $dailyRate * 1.3 : $dailyRate * 2, // Holiday logic
+                'leave' => $dailyRate * 0, // Leave * 0
+                'wfh' => $dailyRate * 1, // WFH * 1
+                'sp' => $dailyRate * 1, // SP * 1
+                default => $dailyRate,
+            };
+            
+            $grossPay += $amount + $adjustment;
+        }
+        
+        // Update the payroll entry
+        $payroll->gross_pay = $grossPay;
+        $payroll->save();
+        
+        // Recalculate deductions and net pay
+        // Note: net_pay is a generated column, so it will be updated automatically
+        
+        DB::commit();
+        
+        return [
+            'success' => true,
+            'message' => 'Gross pay updated successfully',
+            'payroll' => $payroll->fresh()
+        ];
+    } catch (\Exception $e) {
+        DB::rollBack();
+        Log::error('Error updating gross pay: ' . $e->getMessage());
+        
+        return [
+            'success' => false,
+            'message' => 'Failed to update gross pay: ' . $e->getMessage()
+        ];
+    }
 }
 
+public function recalculateGrossPay(Request $request, $id)
+{
+    $result = $this->updateGrossPayFromAttendance($id);
+    
+    if ($request->wantsJson()) {
+        return response()->json($result, $result['success'] ? 200 : 500);
+    }
+    
+    if ($result['success']) {
+        return redirect()->back()->with('success', $result['message']);
+    } else {
+        return redirect()->back()->with('error', $result['message']);
+    }
+}
+}

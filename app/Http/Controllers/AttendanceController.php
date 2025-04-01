@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Attendance;
 use App\Models\Employee;
+use App\Models\PayrollPeriod;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -365,103 +366,140 @@ class AttendanceController extends Controller
         ])->deleteFileAfterSend(true);
     }
 
+    // Modify the fetchForPayslip method to better handle attendance records
     public function fetchForPayslip(Request $request)
     {
         try {
+            Log::info('Fetching attendance records for payslip with request:', $request->all());
+            
             $validated = $request->validate([
-                'employee_number' => 'required',
-                'start_date' => 'required|date',
-                'end_date' => 'required|date',
-                'period_id' => 'nullable|exists:payroll_periods,id',
+                'week_id' => 'required|exists:payroll_periods,week_id',
+                'employee_number' => 'nullable|exists:employees,employee_number',
             ]);
 
-            // Get the employee
-            $employee = Employee::where('employee_number', $validated['employee_number'])->first();
+            // Find the payroll period first to get the date range
+            $period = PayrollPeriod::where('week_id', $validated['week_id'])->first();
             
-            // Adjust dates to ensure Monday-Sunday period
-            $startDate = new \DateTime($validated['start_date']);
-            $endDate = new \DateTime($validated['end_date']);
-            
-            // Ensure start date is a Monday
-            $startDayOfWeek = (int)$startDate->format('N'); // 1 (Monday) through 7 (Sunday)
-            if ($startDayOfWeek !== 1) {
-                // If not Monday, adjust to previous Monday
-                $daysToSubtract = $startDayOfWeek - 1;
-                $startDate->modify("-{$daysToSubtract} days");
-            }
-            
-            // Ensure end date is a Sunday
-            $endDayOfWeek = (int)$endDate->format('N'); // 1 (Monday) through 7 (Sunday)
-            if ($endDayOfWeek !== 7) {
-                // If not Sunday, adjust to next Sunday
-                $daysToAdd = 7 - $endDayOfWeek;
-                $endDate->modify("+{$daysToAdd} days");
-            }
-            
-            // Format dates for query
-            $formattedStartDate = $startDate->format('Y-m-d');
-            $formattedEndDate = $endDate->format('Y-m-d');
-
-            // Fetch attendance records for the date range
-            $attendanceRecords = Attendance::where('employee_number', $validated['employee_number'])
-                ->whereBetween('work_date', [$formattedStartDate, $formattedEndDate])
-                ->orderBy('work_date')
-                ->get()
-                ->map(function ($record) {
-                    return [
-                        'id' => $record->id,
-                        'employee_number' => $record->employee_number,
-                        'work_date' => $record->work_date,
-                        'daily_rate' => $record->daily_rate,
-                        'adjustment' => $record->adjustment,
-                        'status' => $record->status,
-                        'time_in' => $record->time_in,
-                        'time_out' => $record->time_out,
-                        'notes' => $record->notes,
-                    ];
-                });
-
-            // If no records found, generate default records for the period
-            if ($attendanceRecords->isEmpty() && $employee) {
-                $attendanceRecords = $this->generateDefaultAttendanceRecords(
-                    $employee,
-                    $formattedStartDate,
-                    $formattedEndDate
-                );
+            if (!$period) {
+                Log::error('Payroll period not found for week_id: ' . $validated['week_id']);
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Payroll period not found',
+                ], 404);
             }
 
-            // Return the data using Inertia's shared data
-            return Inertia::render('Payroll/PrintPayslip', [
+            Log::info('Found payroll period:', [
+                'week_id' => $period->week_id,
+                'period_start' => $period->period_start,
+                'period_end' => $period->period_end
+            ]);
+
+            // Build the query for attendance records
+            $query = Attendance::whereBetween('work_date', [$period->period_start, $period->period_end]);
+            
+            // If employee_number is provided, filter by it
+            if (isset($validated['employee_number'])) {
+                $query->where('employee_number', $validated['employee_number']);
+            }
+            
+            // Get the attendance records
+            $attendanceRecords = $query->orderBy('work_date')->get();
+
+            Log::info('Fetched attendance records:', [
+                'count' => $attendanceRecords->count(),
+                'date_range' => [$period->period_start, $period->period_end]
+            ]);
+
+            return response()->json([
+                'success' => true,
                 'attendances' => $attendanceRecords,
-                'employee' => $employee,
+                'count' => $attendanceRecords->count(),
                 'period' => [
-                    'start_date' => $formattedStartDate,
-                    'end_date' => $formattedEndDate,
+                    'id' => $period->id,
+                    'week_id' => $period->week_id,
+                    'period_start' => $period->period_start,
+                    'period_end' => $period->period_end,
                 ],
             ]);
         } catch (\Exception $e) {
-            Log::error('Error fetching attendance for payslip: ' . $e->getMessage());
-            return back()->with('error', 'Failed to fetch attendance records: ' . $e->getMessage());
+            Log::error('Error fetching attendance records: ' . $e->getMessage());
+            Log::error('Stack trace: ' . $e->getTraceAsString());
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch attendance records: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    public function fetchForPayroll(Request $request)
+    {
+        try {
+            $validated = $request->validate([
+                'employee_number' => 'required|exists:employees,employee_number',
+                'week_id' => 'required|exists:payroll_periods,week_id',
+            ]);
+
+            // Get the payroll period
+            $payrollPeriod = PayrollPeriod::where('week_id', $validated['week_id'])->firstOrFail();
+            
+            // Get attendance records for this employee in the period
+            $attendanceRecords = Attendance::where('employee_number', $validated['employee_number'])
+                ->whereBetween('work_date', [$payrollPeriod->period_start, $payrollPeriod->period_end])
+                ->orderBy('work_date')
+                ->get();
+                
+            // If no records found, generate default records
+            if ($attendanceRecords->isEmpty()) {
+                $employee = Employee::where('employee_number', $validated['employee_number'])->first();
+                
+                if ($employee) {
+                    $attendanceRecords = $this->generateDefaultAttendanceRecords(
+                        $employee,
+                        $payrollPeriod->period_start,
+                        $payrollPeriod->period_end
+                    );
+                }
+            }
+
+            return Inertia::render('Payroll/Index', [
+                'attendances' => $attendanceRecords,
+                'period' => [
+                    'id' => $payrollPeriod->id,
+                    'period_start' => $payrollPeriod->period_start,
+                    'period_end' => $payrollPeriod->period_end,
+                    'week_id' => $payrollPeriod->week_id,
+                ],
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error fetching attendance for payroll: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch attendance records: ' . $e->getMessage(),
+            ], 500);
         }
     }
 
     /**
      * Generate default attendance records for an employee
      */
-    private function generateDefaultAttendanceRecords($employee, $startDate, $endDate)
-    {
+   /**
+     * Generate default attendance records for an employee
+     */
+    private function generateDefaultAttendanceRecords($employee, $startDate, $endDate) {
         $records = [];
         $currentDate = new \DateTime($startDate);
         $endDateTime = new \DateTime($endDate);
-        $id = 10000; // Temporary ID for generated records
-        
+        $id = 10000;
+
         while ($currentDate <= $endDateTime) {
             $dateStr = $currentDate->format('Y-m-d');
-            $dayOfWeek = (int)$currentDate->format('N'); // 1 (Monday) through 7 (Sunday)
+            $dayOfWeek = $currentDate->format('N'); // 1 (Monday) to 7 (Sunday)
             
-            // Default to Day Off for weekends (Saturday = 6, Sunday = 7)
-            $status = ($dayOfWeek >= 6) ? 'Day Off' : 'Present';
-            
+            // Default status based on day of week
+            $status = ($dayOfWeek >= 6) ? 
+                "Day Off" : "Present";
+
             $records[] = [
                 'id' => $id++,
                 'employee_number' => $employee->employee_number,
@@ -469,12 +507,14 @@ class AttendanceController extends Controller
                 'daily_rate' => $employee->daily_rate,
                 'adjustment' => 0,
                 'status' => $status,
+                'time_in' => '08:00:00',
+                'time_out' => '17:00:00',
                 'full_name' => $employee->full_name,
             ];
-            
+
             $currentDate->modify('+1 day');
         }
-        
+
         return collect($records);
     }
 
@@ -560,5 +600,176 @@ class AttendanceController extends Controller
             return redirect()->back()->with('success', $deleted . ' attendance records deleted successfully');
         }
     }
-}
+    public function getAttendanceForPayslip(Request $request)
+    {
+        try {
+            Log::info('Fetching attendance records for payslip with request:', $request->all());
+            
+            $validated = $request->validate([
+                'employee_number' => 'required|exists:employees,employee_number',
+                'week_id' => 'required|exists:payroll_periods,week_id',
+            ]);
 
+            // Find the payroll period first to get the date range
+            $period = PayrollPeriod::where('week_id', $validated['week_id'])->first();
+            
+            if (!$period) {
+                Log::error('Payroll period not found for week_id: ' . $validated['week_id']);
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Payroll period not found',
+                ], 404);
+            }
+
+            Log::info('Found payroll period:', [
+                'week_id' => $period->week_id,
+                'period_start' => $period->period_start,
+                'period_end' => $period->period_end
+            ]);
+
+            // Now fetch attendance records using the period's date range
+            $attendanceRecords = Attendance::where('employee_number', $validated['employee_number'])
+                ->whereBetween('work_date', [$period->period_start, $period->period_end])
+                ->orderBy('work_date')
+                ->get();
+
+            Log::info('Fetched attendance records:', [
+                'count' => $attendanceRecords->count(),
+                'employee_number' => $validated['employee_number'],
+                'date_range' => [$period->period_start, $period->period_end]
+            ]);
+
+            // If no records found, generate default ones
+            if ($attendanceRecords->isEmpty()) {
+                Log::info('No attendance records found, generating defaults');
+                
+                $employee = Employee::where('employee_number', $validated['employee_number'])->first();
+                
+                if ($employee) {
+                    $attendanceRecords = $this->generateDefaultAttendanceRecords(
+                        $employee,
+                        $period->period_start,
+                        $period->period_end
+                    );
+                    
+                    Log::info('Generated default attendance records:', [
+                        'count' => $attendanceRecords->count()
+                    ]);
+                }
+            }
+
+            return response()->json([
+                'success' => true,
+                'attendances' => $attendanceRecords,
+                'count' => $attendanceRecords->count(),
+                'period' => [
+                    'id' => $period->id,
+                    'week_id' => $period->week_id,
+                    'period_start' => $period->period_start,
+                    'period_end' => $period->period_end,
+                ],
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error fetching attendance records: ' . $e->getMessage());
+            Log::error('Stack trace: ' . $e->getTraceAsString());
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch attendance records: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+    public function updateFromPayslip(Request $request)
+    {
+        try {
+            // Validate the request
+            $validated = $request->validate([
+                'employee_number' => 'required|string|exists:employees,employee_number',
+                'week_id' => 'required|exists:payroll_periods,week_id',
+                'attendance_records' => 'required|array',
+                'attendance_records.*.work_date' => 'required|date',
+                'attendance_records.*.daily_rate' => 'required|numeric',
+                'attendance_records.*.adjustment' => 'nullable|numeric',
+                'attendance_records.*.status' => 'required|string',
+            ]);
+
+            Log::info('Updating attendance records from payslip', [
+                'employee_number' => $validated['employee_number'],
+                'week_id' => $validated['week_id'],
+                'record_count' => count($validated['attendance_records'])
+            ]);
+
+            // Get the payroll period to determine date range
+            $payrollPeriod = DB::table('payroll_periods')
+                ->where('week_id', $validated['week_id'])
+                ->first();
+
+            if (!$payrollPeriod) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Payroll period not found'
+                ], 404);
+            }
+
+            // Begin transaction
+            DB::beginTransaction();
+
+            // Process each attendance record
+            foreach ($validated['attendance_records'] as $record) {
+                // Check if an attendance record already exists for this date and employee
+                $existingRecord = Attendance::where('employee_number', $validated['employee_number'])
+                    ->where('work_date', $record['work_date'])
+                    ->first();
+
+                if ($existingRecord) {
+                    // Update existing record
+                    $existingRecord->update([
+                        'daily_rate' => $record['daily_rate'],
+                        'adjustment' => $record['adjustment'] ?? 0,
+                        'status' => $record['status'],
+                    ]);
+
+                    Log::info('Updated existing attendance record', [
+                        'id' => $existingRecord->id,
+                        'work_date' => $record['work_date']
+                    ]);
+                } else {
+                    // Create new record
+                    Attendance::create([
+                        'employee_number' => $validated['employee_number'],
+                        'work_date' => $record['work_date'],
+                        'daily_rate' => $record['daily_rate'],
+                        'adjustment' => $record['adjustment'] ?? 0,
+                        'status' => $record['status'],
+                    ]);
+
+                    Log::info('Created new attendance record', [
+                        'employee_number' => $validated['employee_number'],
+                        'work_date' => $record['work_date']
+                    ]);
+                }
+            }
+
+            // Commit transaction
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Attendance records updated successfully',
+                'count' => count($validated['attendance_records'])
+            ]);
+        } catch (\Exception $e) {
+            // Rollback transaction on error
+            DB::rollBack();
+            
+            Log::error('Error updating attendance records from payslip: ' . $e->getMessage());
+            Log::error('Stack trace: ' . $e->getTraceAsString());
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to update attendance records: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+   
+}

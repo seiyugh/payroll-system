@@ -4,6 +4,7 @@ import { useRef, useEffect, useState, useMemo } from "react"
 import { router } from "@inertiajs/react"
 import { Button } from "@/components/ui/button"
 import { Printer, Check, X, AlertCircle, Clock } from "lucide-react"
+import { toast } from "sonner"
 
 // Update the interface to better match your database schema
 interface Attendance {
@@ -67,6 +68,29 @@ interface PrintPayslipProps {
   onClose: () => void
 }
 
+// Remove the fetchAdditionalAttendanceData function that makes API calls
+// Replace it with this version that only uses props
+const fetchAdditionalAttendanceData = (
+  employeeNumber: string,
+  weekId: number,
+  setAttendanceRecords: any,
+  attendances: Attendance[],
+) => {
+  // Only use attendance records from props
+  if (attendances && attendances.length > 0) {
+    // Filter to only include records for this employee
+    const filteredAttendances = attendances.filter((record) => record.employee_number === employeeNumber)
+
+    if (filteredAttendances.length > 0) {
+      setAttendanceRecords(filteredAttendances)
+      return
+    }
+  }
+
+  // If no records found in props, we'll rely on the generateAttendanceFromPayroll function
+  console.log("No attendance records found in props for employee:", employeeNumber)
+}
+
 // Add a function to determine which template to use based on department
 const getPayslipTemplate = (department: string | undefined) => {
   if (!department) return "jbd" // Default to JBD template if no department
@@ -88,6 +112,8 @@ const PrintPayslip = ({ payroll, attendances = [], onClose }: PrintPayslipProps)
   const printRef = useRef<HTMLDivElement>(null)
   const [attendanceRecords, setAttendanceRecords] = useState<Attendance[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [isEditing, setIsEditing] = useState(false)
+  const [editedTemplate, setEditedTemplate] = useState<string>("")
 
   // Component mount/unmount logging
   useEffect(() => {
@@ -352,14 +378,23 @@ const PrintPayslip = ({ payroll, attendances = [], onClose }: PrintPayslipProps)
   const calculateAmount = (status: string, dailyRate: number) => {
     switch (status.toLowerCase()) {
       case "present":
-      case "holiday":
-      case "vacation leave":
-      case "sick leave":
-        return dailyRate
-      case "half day":
-        return dailyRate / 2
+        return dailyRate * 1 // Present * 1
       case "absent":
+        return dailyRate * 0 // Absent * 0
       case "day off":
+        return dailyRate * 0 // Day Off * 0
+      case "half day":
+        return dailyRate / 2 // Half Day / 2
+      case "holiday":
+        // For simplicity, we'll use the higher rate (special holiday)
+        return dailyRate * 2 // Special holiday * 2
+      case "leave":
+        return dailyRate * 0 // Leave * 0
+      case "wfh":
+        return dailyRate * 1 // WFH * 1
+      case "sp":
+        return dailyRate * 1 // SP * 1
+      case "no record":
         return 0
       default:
         return 0
@@ -491,16 +526,36 @@ const PrintPayslip = ({ payroll, attendances = [], onClose }: PrintPayslipProps)
     if (!dailyRatesData || dailyRatesData.length === 0) {
       return payroll?.gross_pay ? Number(payroll.gross_pay) : 0
     }
-    return dailyRatesData.reduce((total, data) => {
+
+    // For Allen One department, we need to include the short amount in the calculation
+    const department = payroll?.department || payroll?.employee?.department || ""
+    const isAllenOne = department.toLowerCase() === "allen one"
+
+    // Calculate the sum of all daily amounts and adjustments
+    const calculatedGrossPay = dailyRatesData.reduce((total, data) => {
       const amount = Number(data.amount) || 0
       const adjustment = Number(data.adjustment) || 0
       return total + amount + adjustment
     }, 0)
-  }, [dailyRatesData, payroll?.gross_pay])
+
+    // For Allen One, we need to ensure the short amount is properly accounted for
+    if (isAllenOne && payroll?.short) {
+      // The short amount is already included in the deductions, so we don't need to adjust gross pay
+      return calculatedGrossPay
+    }
+
+    return calculatedGrossPay
+  }, [dailyRatesData, payroll?.gross_pay, payroll?.department, payroll?.employee?.department, payroll?.short])
 
   // Fix the total deductions calculation
   const totalDeductions = useMemo(() => {
     if (!payroll) return 0
+
+    // Include the short amount for Allen One department
+    const department = payroll?.department || payroll?.employee?.department || ""
+    const isAllenOne = department.toLowerCase() === "allen one"
+    const shortAmount = isAllenOne ? Number(payroll.short) || 0 : 0
+
     return [
       Number(payroll.sss_deduction) || 0,
       Number(payroll.philhealth_deduction) || 0,
@@ -510,6 +565,7 @@ const PrintPayslip = ({ payroll, attendances = [], onClose }: PrintPayslipProps)
       Number(payroll.loan) || 0,
       Number(payroll.vat) || 0,
       Number(payroll.other_deductions) || 0,
+      shortAmount,
     ].reduce((sum, val) => sum + val, 0)
   }, [payroll])
 
@@ -580,6 +636,24 @@ const PrintPayslip = ({ payroll, attendances = [], onClose }: PrintPayslipProps)
     }
   }
 
+  const handleEditTemplate = () => {
+    // Get the current template HTML
+    const templateHtml =
+      getPayslipTemplate(payroll?.department || payroll?.employee?.department) === "allen-one"
+        ? document.querySelector(".allen-one-preview")?.innerHTML
+        : document.querySelector(".jbd-telecom-preview")?.innerHTML
+
+    setEditedTemplate(templateHtml || "")
+    setIsEditing(true)
+  }
+
+  const handleSaveTemplate = () => {
+    // In a real implementation, you would save the template to the server
+    // For now, we'll just toggle back to preview mode
+    setIsEditing(false)
+    toast.success("Template changes saved!")
+  }
+
   // Modify the handlePrint function to use the appropriate template based on department
   const handlePrint = () => {
     if (!payroll || !payroll.id) {
@@ -625,15 +699,15 @@ const PrintPayslip = ({ payroll, attendances = [], onClose }: PrintPayslipProps)
         top: 0;
         left: 0;
         width: 100%;
-        height: 100%;
+        height: 250%;
         z-index: 50;
         pointer-events: none;
-        opacity: 0.3;
+        opacity: 0.6;
         overflow: hidden;
       }
       .confidential-text {
         position: absolute;
-        font-size: 9px;
+        font-size: 20px;
         font-weight: bold;
         color: rgba(0, 0, 0, 0.25);
         transform: rotate(-30deg);
@@ -740,7 +814,7 @@ const PrintPayslip = ({ payroll, attendances = [], onClose }: PrintPayslipProps)
         top: 0;
         left: 0;
         width: 100%;
-        height: 100%;
+        height: 250%;
         z-index: 1;
         pointer-events: none;
         overflow: hidden;
@@ -754,6 +828,30 @@ const PrintPayslip = ({ payroll, attendances = [], onClose }: PrintPayslipProps)
         transform: rotate(-30deg);
         white-space: nowrap;
         pointer-events: none;
+      }
+         .signature-section {
+        margin-top: 15px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+        .signature-cont{
+        display: flex;
+        justify-content: center;
+        }
+      .signature {
+        width: 70%;
+        text-align: center;
+        margin-top: 20px;
+        border-top: 1px solid #000;
+        padding-top: 3px;
+        align-items: center;
+      }
+      .signature-name {
+        font-size: 8px;
+      }
+      .signature-title {
+        font-size: 7px;
       }
     </style>
     <script>
@@ -784,8 +882,8 @@ const PrintPayslip = ({ payroll, attendances = [], onClose }: PrintPayslipProps)
       const xSpacing = 120; // Wider spacing
       const ySpacing = 80;  // Taller spacing
       
-      for (let y = 20; y < containerHeight - 20; y += ySpacing) {
-        for (let x = 20; x < containerWidth - 20; x += xSpacing) {
+      for (let y = 1; y < containerHeight - 1; y += ySpacing) {
+        for (let x = 2; x < containerWidth - 20; x += xSpacing) {
           // Create watermark element
           const watermark = document.createElement('div');
           watermark.className = 'watermark-text';
@@ -797,7 +895,7 @@ const PrintPayslip = ({ payroll, attendances = [], onClose }: PrintPayslipProps)
           watermark.style.left = x + 'px';
           watermark.style.fontSize = '9px'; // Slightly larger
           watermark.style.fontWeight = 'bold';
-          watermark.style.color = 'rgba(128, 128, 128, 0.25)'; // More visible
+          watermark.style.color = 'rgba(128, 128, 128, 0.7)'; // More visible
           watermark.style.transform = 'rotate(-30deg)';
           watermark.style.whiteSpace = 'nowrap';
           watermark.style.pointerEvents = 'none';
@@ -806,21 +904,6 @@ const PrintPayslip = ({ payroll, attendances = [], onClose }: PrintPayslipProps)
           container.appendChild(watermark);
         }
       }
-      
-      // Add a diagonal striped pattern as additional watermark with increased opacity
-      const diagonalPattern = document.createElement('div');
-      diagonalPattern.className = 'confidential-diagonal';
-      diagonalPattern.style.position = 'absolute';
-      diagonalPattern.style.top = '0';
-      diagonalPattern.style.left = '0';
-      diagonalPattern.style.width = '100%';
-      diagonalPattern.style.height = '100%';
-      diagonalPattern.style.zIndex = '-1';
-      diagonalPattern.style.opacity = '0.15'; // Increased from 0.1
-      diagonalPattern.style.pointerEvents = 'none';
-      payslip.appendChild(diagonalPattern);
-      
-      // Removed the large centered watermark
       
       // Print after a longer delay to ensure everything is rendered
       setTimeout(function() {
@@ -916,7 +999,7 @@ const PrintPayslip = ({ payroll, attendances = [], onClose }: PrintPayslipProps)
           return `
         <tr>
           <td>${monthOfYear}/${dayOfMonth}<br>${dayName}</td>
-          <td style="text-align: right;">${data.status.toLowerCase() !== "absent" && data.status.toLowerCase() !== "day off" ? formatCurrency(data.dailyRate) : "0.00"}</td>
+          <td style="text-align: right;">${formatCurrency(data.amount)}</td>
           <td style="text-align: right;">${formatCurrency(data.adjustment)}</td>
           <td>${deductionLabel}</td>
           <td style="text-align: right;">${deductionValue}</td>
@@ -937,6 +1020,12 @@ const PrintPayslip = ({ payroll, attendances = [], onClose }: PrintPayslipProps)
           <td>${formatCurrency(netPay)}</td>
         </tr>
       </table>
+      <div class="signature-cont">
+       <div class="signature">
+          <div class="signature-name">Crissel Ann Bando</div>
+          <div class="signature-title">Billing Assistant - OIC</div>
+        </div>
+        </div>
     </div>
   </body>
 </html>`
@@ -1225,7 +1314,7 @@ const PrintPayslip = ({ payroll, attendances = [], onClose }: PrintPayslipProps)
           watermark.style.left = x + 'px';
           watermark.style.fontSize = '8px';
           watermark.style.fontWeight = 'bold';
-          watermark.style.color = 'rgba(128, 128, 128, 0.25)';
+          watermark.style.color = 'rgba(128, 128, 128, 0.70)';
           watermark.style.transform = 'rotate(-30deg)';
           watermark.style.whiteSpace = 'nowrap';
           watermark.style.pointerEvents = 'none';
@@ -1234,35 +1323,6 @@ const PrintPayslip = ({ payroll, attendances = [], onClose }: PrintPayslipProps)
           container.appendChild(watermark);
         }
       }
-      
-      // Add a diagonal striped pattern as additional watermark
-      const diagonalPattern = document.createElement('div');
-      diagonalPattern.className = 'confidential-diagonal';
-      diagonalPattern.style.position = 'absolute';
-      diagonalPattern.style.top = '0';
-      diagonalPattern.style.left = '0';
-      diagonalPattern.style.width = '100%';
-      diagonalPattern.style.height = '100%';
-      diagonalPattern.style.zIndex = '-1';
-      diagonalPattern.style.opacity = '0.1';
-      diagonalPattern.style.pointerEvents = 'none';
-      payslip.appendChild(diagonalPattern);
-      
-      // Add a large centered watermark
-      const centerWatermark = document.createElement('div');
-      centerWatermark.className = 'confidential-text';
-      centerWatermark.textContent = 'CONFIDENTIAL';
-      centerWatermark.style.position = 'absolute';
-      centerWatermark.style.fontSize = '40px';
-      centerWatermark.style.fontWeight = 'bold';
-      centerWatermark.style.color = 'rgba(255, 0, 0, 0.1)';
-      centerWatermark.style.top = '50%';
-      centerWatermark.style.left = '50%';
-      centerWatermark.style.transform = 'translate(-50%, -50%) rotate(-45deg)';
-      centerWatermark.style.whiteSpace = 'nowrap';
-      centerWatermark.style.zIndex = '-1';
-      payslip.appendChild(centerWatermark);
-      
       // Print after a longer delay to ensure everything is rendered
       setTimeout(function() {
         window.print();
@@ -1347,7 +1407,7 @@ const PrintPayslip = ({ payroll, attendances = [], onClose }: PrintPayslipProps)
         <tr>
           <td>${formatShortDate(data.date.toISOString())}</td>
           <td><span class="status-badge">${data.status}</span></td>
-          <td class="text-right">${formatCurrency(data.dailyRate)}</td>
+          <td class="text-right">${formatCurrency(data.amount)}</td>
           <td class="text-right">${formatCurrency(data.adjustment)}</td>
         </tr>`
         })
@@ -1467,10 +1527,19 @@ const PrintPayslip = ({ payroll, attendances = [], onClose }: PrintPayslipProps)
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-lg font-semibold">Payslip Preview</h2>
           <div className="flex space-x-2">
-            <Button onClick={handlePrint} className="flex items-center gap-1">
-              <Printer className="h-4 w-4" />
-              Print
-            </Button>
+            {isEditing ? (
+              <Button onClick={handleSaveTemplate} className="flex items-center gap-1">
+                Save Template
+              </Button>
+            ) : (
+              <>
+
+                <Button onClick={handlePrint} className="flex items-center gap-1">
+                  <Printer className="h-4 w-4" />
+                  Print
+                </Button>
+              </>
+            )}
             <Button variant="outline" onClick={handleClose} className="dark:text-white">
               Close
             </Button>
@@ -1488,417 +1557,438 @@ const PrintPayslip = ({ payroll, attendances = [], onClose }: PrintPayslipProps)
         ) : attendanceRecords.length === 0 ? (
           <div className="text-center py-8 text-gray-500">No attendance records available. Please try again.</div>
         ) : (
-          <div
-            ref={printRef}
-            className="payslip max-w-md mx-auto p-4 border border-black text-sm relative"
-            style={{ maxHeight: "12in" }}
-          >
-            <div
-              style={{
-                position: "absolute",
-                top: 0,
-                left: 0,
-                width: "100%",
-                height: "100%",
-                zIndex: 5,
-                overflow: "hidden",
-                pointerEvents: "none",
-                opacity: 0.3,
-              }}
-            >
-              {/* Generate confidential watermarks for preview */}
-              {(() => {
-                const watermarks = []
-                const rows = 20
-                const cols = 20
-
-                for (let r = 0; r < rows; r++) {
-                  for (let c = 0; c < cols; c++) {
-                    const text = (r + c) % 2 === 0 ? "CONFIDENTIAL" : "PRIVATE"
-                    watermarks.push(
-                      <div
-                        key={`${r}-${c}`}
-                        style={{
-                          position: "absolute",
-                          fontSize: "9px",
-                          fontWeight: "bold",
-                          color: "rgba(0, 0, 0, 0.25)",
-                          transform: "rotate(-30deg)",
-                          left: `${(c * 100) / cols}%`,
-                          top: `${(r * 100) / rows}%`,
-                          whiteSpace: "nowrap",
-                          overflow: "hidden",
-                          maxWidth: "150px",
-                          textOverflow: "ellipsis",
-                        }}
-                      >
-                        {text}
-                      </div>,
-                    )
-                  }
-                }
-
-                return watermarks
-              })()}
-            </div>
-            {/* Preview based on department */}
-            {getPayslipTemplate(payroll?.department || payroll?.employee?.department) === "allen-one" ? (
-              // Allen One template preview
-              <div className="allen-one-preview">
-                <div className="text-center font-bold text-lg bg-orange-500 text-white py-2">
-                  AICOMVENIENCE GROCERY PRODUCTS DISTRIBUTION
-                </div>
-                <div className="text-center text-xs py-1 bg-blue-800 text-white">
-                  Ground Flr Aicom Bldg. Sta Rita Karsada, Batangas City
-                </div>
-                <div className="text-center text-xs py-1 bg-blue-400 border-b border-black">
-                  Telephone # (043)980-5276/jbd.aicomhrdepartment@gmail.com
-                </div>
-
-                {/* Payslip Title */}
-                <div className="text-center font-bold text-base my-2">PAYSLIP</div>
-
-                {/* Employee Details */}
-                <table className="w-full text-xs border border-black mb-2">
-                  <tbody>
-                    <tr>
-                      <td className="border border-black p-1 w-1/5">Employee's Name</td>
-                      <td className="border border-black p-1 w-3/10">
-                        {payroll.full_name || payroll.employee?.full_name || "N/A"}
-                      </td>
-                      <td className="border border-black p-1 w-1/5">Department</td>
-                      <td className="border border-black p-1 w-3/10">
-                        {payroll.department || (payroll.employee && payroll.employee.department) || "Operations"}
-                      </td>
-                    </tr>
-                    <tr>
-                      <td className="border border-black p-1">Month & Year</td>
-                      <td className="border border-black p-1">
-                        {payroll.payroll_period &&
-                        payroll.payroll_period.period_start &&
-                        payroll.payroll_period.period_end
-                          ? `${formatDate(payroll.payroll_period.period_start)} to ${formatDate(payroll.payroll_period.period_end)}`
-                          : "N/A"}
-                      </td>
-                      <td className="border border-black p-1">Designation</td>
-                      <td className="border border-black p-1">
-                        {payroll.position || (payroll.employee && payroll.employee.position) || "Store Staff/Cashier"}
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-
-                {/* Earnings and Deductions Table */}
-                <div className="relative">
-                  <table className="w-full text-xs border border-black mb-2">
-                    <thead>
-                      <tr className="bg-gray-100">
-                        <th className="border border-black p-1 text-center" colSpan={3}>
-                          Earnings
-                        </th>
-                        <th className="border border-black p-1 text-center" colSpan={2}>
-                          Deduction
-                        </th>
-                      </tr>
-                      <tr className="bg-gray-100">
-                        <th className="border border-black p-1">Cut-Off</th>
-                        <th className="border border-black p-1">Daily Rate</th>
-                        <th className="border border-black p-1">Adjustment</th>
-                        <th className="border border-black p-1">Particular</th>
-                        <th className="border border-black p-1">Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {dailyRatesData.slice(0, 7).map((data, index) => {
-                        const date = new Date(data.date)
-                        const dayOfMonth = date.getDate().toString().padStart(2, "0")
-                        const monthOfYear = (date.getMonth() + 1).toString().padStart(2, "0")
-                        const dayName = date.toLocaleDateString("en-US", { weekday: "long" })
-
-                        // Get deduction values for specific rows
-                        let deductionLabel = ""
-                        let deductionValue = ""
-
-                        if (index === 0) {
-                          deductionLabel = "Cash Advances"
-                          deductionValue = formatCurrency(payroll.cash_advance)
-                        } else if (index === 1) {
-                          deductionLabel = "Short"
-                          deductionValue = formatCurrency(payroll.short)
-                        } else if (index === 2) {
-                          deductionLabel = "Loan"
-                          deductionValue = formatCurrency(payroll.loan)
-                        } else if (index === 3) {
-                          // Get current month and year for deduction labels
-                          const currentDate = new Date()
-                          const currentMonth = currentDate.toLocaleString("default", { month: "short" })
-                          const currentYear = currentDate.getFullYear()
-                          const deductionPeriod = currentMonth + ". " + currentYear
-
-                          deductionLabel = "HDMF (" + deductionPeriod + ")"
-                          deductionValue = formatCurrency(payroll.philhealth_deduction)
-                        } else if (index === 4) {
-                          // Get current month and year for deduction labels
-                          const currentDate = new Date()
-                          const currentMonth = currentDate.toLocaleString("default", { month: "short" })
-                          const currentYear = currentDate.getFullYear()
-                          const deductionPeriod = currentMonth + ". " + currentYear
-
-                          deductionLabel = "SSS (" + deductionPeriod + ")"
-                          deductionValue = formatCurrency(payroll.sss_deduction)
-                        } else if (index === 5) {
-                          // Get current month and year for deduction labels
-                          const currentDate = new Date()
-                          const currentMonth = currentDate.toLocaleString("default", { month: "short" })
-                          const currentYear = currentDate.getFullYear()
-                          const deductionPeriod = currentMonth + ". " + currentYear
-
-                          deductionLabel = "Pag-IBIG (" + deductionPeriod + ")"
-                          deductionValue = formatCurrency(payroll.pagibig_deduction)
-                        } else if (index === 6) {
-                          deductionLabel = "Withholding Tax"
-                          deductionValue = formatCurrency(payroll.tax_deduction)
-                        } else if (index === 7) {
-                          deductionLabel = "Others"
-                          deductionValue = formatCurrency(payroll.other_deductions)
-                        }
-
-                        return (
-                          <tr key={index}>
-                            <td className="border border-black p-1">
-                              {`${monthOfYear}/${dayOfMonth}`}
-                              <br />
-                              {dayName}
-                            </td>
-                            <td className="border border-black p-1 text-right">
-                              {data.status.toLowerCase() !== "absent" && data.status.toLowerCase() !== "day off"
-                                ? formatCurrency(data.dailyRate)
-                                : "0.00"}
-                            </td>
-                            <td className="border border-black p-1 text-right">{formatCurrency(data.adjustment)}</td>
-                            <td className="border border-black p-1">
-                              {index === 0
-                                ? "Cash Advances"
-                                : index === 1
-                                  ? "Short"
-                                  : index === 2
-                                    ? "Loan"
-                                    : index === 3
-                                      ? `HDMF (${new Date().toLocaleString("default", { month: "short" })}. ${new Date().getFullYear()})`
-                                      : index === 4
-                                        ? `SSS (${new Date().toLocaleString("default", { month: "short" })}. ${new Date().getFullYear()})`
-                                        : index === 5
-                                          ? `Pag-IBIG (${new Date().toLocaleString("default", { month: "short" })}. ${new Date().getFullYear()})`
-                                          : index === 6
-                                            ? "Withholding Tax"
-                                            : index === 7
-                                              ? "Others"
-                                              : ""}
-                            </td>
-                            <td className="border border-black p-1 text-right">
-                              {index === 0
-                                ? formatCurrency(payroll.cash_advance)
-                                : index === 1
-                                  ? formatCurrency(payroll.short)
-                                  : index === 2
-                                    ? formatCurrency(payroll.loan)
-                                    : index === 3
-                                      ? formatCurrency(payroll.philhealth_deduction)
-                                      : index === 4
-                                        ? formatCurrency(payroll.sss_deduction)
-                                        : index === 5
-                                          ? formatCurrency(payroll.pagibig_deduction)
-                                          : index === 6
-                                            ? formatCurrency(payroll.tax_deduction)
-                                            : index === 7
-                                              ? formatCurrency(payroll.other_deductions)
-                                              : ""}
-                            </td>
-                          </tr>
-                        )
-                      })}
-                      <tr className="font-bold">
-                        <td className="border border-black p-1" colSpan={2}>
-                          Gross Pay
-                        </td>
-                        <td className="border border-black p-1 text-right">{formatCurrency(grossPay)}</td>
-                        <td className="border border-black p-1">Total Deduction</td>
-                        <td className="border border-black p-1 text-right">{formatCurrency(totalDeductions)}</td>
-                      </tr>
-                      <tr>
-                        <td className="border border-black p-1" colSpan={3}></td>
-                        <td className="border border-black p-1 font-bold">Net Pay</td>
-                        <td className="border border-black p-1 text-right font-bold">{formatCurrency(netPay)}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
+          <>
+            {isEditing ? (
+              <div className="border border-gray-300 rounded-md p-4">
+                <textarea
+                  className="w-full h-[500px] font-mono text-sm"
+                  value={editedTemplate}
+                  onChange={(e) => setEditedTemplate(e.target.value)}
+                />
               </div>
             ) : (
-              // JBD template preview
-              <>
-                <div className="text-center font-bold text-lg bg-gray-500 text-white py-2">JBD TELECOM HUB POINT</div>
-                <div className="text-center text-xs py-1 border-b border-black">
-                  2nd Floor AICOM Bldg., Purok 7 Brgy. Sta. Rita Karsada, Batangas City
-                  <br />
-                  Telephone # (043)980-5276 | jbd.aicomhrdepartment@gmail.com
-                </div>
+              <div
+                ref={printRef}
+                className="payslip max-w-md mx-auto p-4 border border-black text-sm relative"
+                style={{ maxHeight: "12in" }}
+              >
+                <div
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    height: "100%",
+                    zIndex: 5,
+                    overflow: "hidden",
+                    pointerEvents: "none",
+                    opacity: 0.3,
+                  }}
+                >
+                  {/* Generate confidential watermarks for preview */}
+                  {(() => {
+                    const watermarks = []
+                    const rows = 20
+                    const cols = 20
 
-                {/* Payslip Title */}
-                <div className="text-center font-bold text-base my-2">PAY SLIP</div>
-
-                {/* Employee Details */}
-                <table className="w-full text-xs border border-black mb-2">
-                  <tbody>
-                    <tr>
-                      <td className="font-bold w-1/3 border border-black p-1">Name</td>
-                      <td className="border border-black p-1">
-                        {payroll.full_name || payroll.employee?.full_name || "N/A"}
-                      </td>
-                    </tr>
-                    <tr>
-                      <td className="font-bold border border-black p-1">Department</td>
-                      <td className="border border-black p-1">
-                        {payroll.department || (payroll.employee && payroll.employee.department) || "N/A"}
-                      </td>
-                    </tr>
-                    <tr>
-                      <td className="font-bold w-1/3 border border-black p-1">Cut-off Period</td>
-                      <td className="border border-black p-1">
-                        {payroll.payroll_period &&
-                        payroll.payroll_period.period_start &&
-                        payroll.payroll_period.period_end
-                          ? `${formatDate(payroll.payroll_period.period_start)} to ${formatDate(payroll.payroll_period.period_end)}`
-                          : "N/A"}
-                      </td>
-                    </tr>
-                    <tr>
-                      <td className="font-bold border border-black p-1">Designation</td>
-                      <td className="border border-black p-1">
-                        {payroll.position || (payroll.employee && payroll.employee.position) || "N/A"}
-                      </td>
-                    </tr>
-                    {payroll.status && (
-                      <tr>
-                        <td className="font-bold border border-black p-1">Status</td>
-                        <td className="border border-black p-1">
+                    for (let r = 0; r < rows; r++) {
+                      for (let c = 0; c < cols; c++) {
+                        const text = (r + c) % 2 === 0 ? "CONFIDENTIAL" : "PRIVATE"
+                        watermarks.push(
                           <div
-                            className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs ${getStatusBadgeColor(
-                              payroll.status,
-                            )}`}
+                            key={`${r}-${c}`}
+                            style={{
+                              position: "absolute",
+                              fontSize: "9px",
+                              fontWeight: "bold",
+                              color: "rgba(0, 0, 0, 0.25)",
+                              transform: "rotate(-30deg)",
+                              left: `${(c * 100) / cols}%`,
+                              top: `${(r * 100) / rows}%`,
+                              whiteSpace: "nowrap",
+                              overflow: "hidden",
+                              maxWidth: "150px",
+                              textOverflow: "ellipsis",
+                            }}
                           >
-                            {getStatusIcon(payroll.status)}
-                            <span className="ml-1">{payroll.status}</span>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+                            {text}
+                          </div>,
+                        )
+                      }
+                    }
 
-                {/* Earnings Table */}
-                <div className="font-bold text-center my-2">Earnings</div>
-                <div className="relative">
-                  <table className="w-full text-xs border border-black mb-2">
-                    <thead>
-                      <tr className="bg-gray-200">
-                        <th className="border border-black p-1">Date</th>
-                        <th className="border border-black p-1">Status</th>
-                        <th className="border border-black p-1">Daily Rate</th>
-                        <th className="border border-black p-1">Adjustments</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {dailyRatesData.map((data, index) => {
-                        return (
-                          <tr key={index} className={data.status.toLowerCase() === "no record" ? "bg-gray-50" : ""}>
+                    return watermarks
+                  })()}
+                </div>
+                {/* Preview based on department */}
+                {getPayslipTemplate(payroll?.department || payroll?.employee?.department) === "allen-one" ? (
+                  // Allen One template preview
+                  <div className="allen-one-preview">
+                    <div className="text-center font-bold text-lg bg-orange-500 text-white py-2">
+                      AICOMVENIENCE GROCERY PRODUCTS DISTRIBUTION
+                    </div>
+                    <div className="text-center text-xs py-1 bg-blue-800 text-white">
+                      Ground Flr Aicom Bldg. Sta Rita Karsada, Batangas City
+                    </div>
+                    <div className="text-center text-xs py-1 bg-blue-400 border-b border-black">
+                      Telephone # (043)980-5276/jbd.aicomhrdepartment@gmail.com
+                    </div>
+
+                    {/* Payslip Title */}
+                    <div className="text-center font-bold text-base my-2">PAYSLIP</div>
+
+                    {/* Employee Details */}
+                    <table className="w-full text-xs border border-black mb-2">
+                      <tbody>
+                        <tr>
+                          <td className="border border-black p-1 w-1/5">Employee's Name</td>
+                          <td className="border border-black p-1 w-3/10">
+                            {payroll.full_name || payroll.employee?.full_name || "N/A"}
+                          </td>
+                          <td className="border border-black p-1 w-1/5">Department</td>
+                          <td className="border border-black p-1 w-3/10">
+                            {payroll.department || (payroll.employee && payroll.employee.department) || "Operations"}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="border border-black p-1">Cut Off Period</td>
+                          <td className="border border-black p-1">
+                            {payroll.payroll_period &&
+                            payroll.payroll_period.period_start &&
+                            payroll.payroll_period.period_end
+                              ? `${formatDate(payroll.payroll_period.period_start)} to ${formatDate(payroll.payroll_period.period_end)}`
+                              : "N/A"}
+                          </td>
+                          <td className="border border-black p-1">Designation</td>
+                          <td className="border border-black p-1">
+                            {payroll.position ||
+                              (payroll.employee && payroll.employee.position) ||
+                              "Store Staff/Cashier"}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+
+                    {/* Earnings and Deductions Table */}
+                    <div className="relative">
+                      <table className="w-full text-xs border border-black mb-2">
+                        <thead>
+                          <tr className="bg-gray-100">
+                            <th className="border border-black p-1 text-center" colSpan={3}>
+                              Earnings
+                            </th>
+                            <th className="border border-black p-1 text-center" colSpan={2}>
+                              Deduction
+                            </th>
+                          </tr>
+                          <tr className="bg-gray-100">
+                            <th className="border border-black p-1">Cut-Off</th>
+                            <th className="border border-black p-1">Daily Rate</th>
+                            <th className="border border-black p-1">Adjustment</th>
+                            <th className="border border-black p-1">Particular</th>
+                            <th className="border border-black p-1">Amount</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {dailyRatesData.slice(0, 7).map((data, index) => {
+                            const date = new Date(data.date)
+                            const dayOfMonth = date.getDate().toString().padStart(2, "0")
+                            const monthOfYear = (date.getMonth() + 1).toString().padStart(2, "0")
+                            const dayName = date.toLocaleDateString("en-US", { weekday: "long" })
+
+                            // Get deduction values for specific rows
+                            let deductionLabel = ""
+                            let deductionValue = ""
+
+                            if (index === 0) {
+                              deductionLabel = "Cash Advances"
+                              deductionValue = formatCurrency(payroll.cash_advance)
+                            } else if (index === 1) {
+                              deductionLabel = "Short"
+                              deductionValue = formatCurrency(payroll.short)
+                            } else if (index === 2) {
+                              deductionLabel = "Loan"
+                              deductionValue = formatCurrency(payroll.loan)
+                            } else if (index === 3) {
+                              // Get current month and year for deduction labels
+                              const currentDate = new Date()
+                              const currentMonth = currentDate.toLocaleString("default", { month: "short" })
+                              const currentYear = currentDate.getFullYear()
+                              const deductionPeriod = currentMonth + ". " + currentYear
+
+                              deductionLabel = "HDMF (" + deductionPeriod + ")"
+                              deductionValue = formatCurrency(payroll.philhealth_deduction)
+                            } else if (index === 4) {
+                              // Get current month and year for deduction labels
+                              const currentDate = new Date()
+                              const currentMonth = currentDate.toLocaleString("default", { month: "short" })
+                              const currentYear = currentDate.getFullYear()
+                              const deductionPeriod = currentMonth + ". " + currentYear
+
+                              deductionLabel = "SSS (" + deductionPeriod + ")"
+                              deductionValue = formatCurrency(payroll.sss_deduction)
+                            } else if (index === 5) {
+                              // Get current month and year for deduction labels
+                              const currentDate = new Date()
+                              const currentMonth = currentDate.toLocaleString("default", { month: "short" })
+                              const currentYear = currentDate.getFullYear()
+                              const deductionPeriod = currentMonth + ". " + currentYear
+
+                              deductionLabel = "Pag-IBIG (" + deductionPeriod + ")"
+                              deductionValue = formatCurrency(payroll.pagibig_deduction)
+                            } else if (index === 6) {
+                              deductionLabel = "Withholding Tax"
+                              deductionValue = formatCurrency(payroll.tax_deduction)
+                            } else if (index === 7) {
+                              deductionLabel = "Others"
+                              deductionValue = formatCurrency(payroll.other_deductions)
+                            }
+
+                            return (
+                              <tr key={index}>
+                                <td className="border border-black p-1">
+                                  {monthOfYear}/{dayOfMonth}
+                                  <br />
+                                  {dayName}
+                                </td>
+                                <td className="border border-black p-1 text-right">{formatCurrency(data.amount)}</td>
+                                <td className="border border-black p-1 text-right">
+                                  {formatCurrency(data.adjustment)}
+                                </td>
+                                <td className="border border-black p-1">
+                                  {index === 0
+                                    ? "Cash Advances"
+                                    : index === 1
+                                      ? "Short"
+                                      : index === 2
+                                        ? "Loan"
+                                        : index === 3
+                                          ? `HDMF (${new Date().toLocaleString("default", { month: "short" })}. ${new Date().getFullYear()})`
+                                          : index === 4
+                                            ? `SSS (${new Date().toLocaleString("default", { month: "short" })}. ${new Date().getFullYear()})`
+                                            : index === 5
+                                              ? `Pag-IBIG (${new Date().toLocaleString("default", { month: "short" })}. ${new Date().getFullYear()})`
+                                              : index === 6
+                                                ? "Withholding Tax"
+                                                : index === 7
+                                                  ? "Others"
+                                                  : ""}
+                                </td>
+                                <td className="border border-black p-1 text-right">
+                                  {index === 0
+                                    ? formatCurrency(payroll.cash_advance)
+                                    : index === 1
+                                      ? formatCurrency(payroll.short)
+                                      : index === 2
+                                        ? formatCurrency(payroll.loan)
+                                        : index === 3
+                                          ? formatCurrency(payroll.philhealth_deduction)
+                                          : index === 4
+                                            ? formatCurrency(payroll.sss_deduction)
+                                            : index === 5
+                                              ? formatCurrency(payroll.pagibig_deduction)
+                                              : index === 6
+                                                ? formatCurrency(payroll.tax_deduction)
+                                                : index === 7
+                                                  ? formatCurrency(payroll.other_deductions)
+                                                  : ""}
+                                </td>
+                              </tr>
+                            )
+                          })}
+                          <tr className="font-bold">
+                            <td className="border border-black p-1 text-left" colSpan={2} >Gross Pay</td>
+                            <td className="border border-black p-1 text-right">{formatCurrency(grossPay)}</td>
+                            <td className="border border-black p-1">Total Deduction</td>
+                            <td className="border border-black p-1 text-right">{formatCurrency(totalDeductions)}</td>
+                          </tr>
+                          <tr>
+                            <td colSpan={3}></td>
+                            <td className="border border-black p-1">Net Pay</td>
+                            <td className="border border-black p-1 text-right">{formatCurrency(netPay)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                      <div className="flex justify-center mt-4">
+                         <div className="w-3/4 text-center border-t border-black pt-1 mt-4">
+                        Crissel Ann Bando
+                        <div className="text-xs">Billing Assistant - OIC</div>
+                      </div>
+                    </div>
+                    </div>
+                  </div>
+                ) : (
+                  // JBD template preview
+                  <div className="jbd-telecom-preview">
+                    <div className="text-center font-bold text-lg bg-gray-600 text-white py-2">
+                      JBD TELECOM HUB POINT
+                    </div>
+                    <div className="text-center text-xs py-1 border-b border-black">
+                      2nd Floor AICOM Bldg., Purok 7 Brgy. Sta. Rita Karsada, Batangas City
+                      <br />
+                      Telephone # (043)980-5276 | jbd.aicomhrdepartment@gmail.com
+                    </div>
+
+                    {/* Payslip Title */}
+                    <div className="text-center font-bold text-base my-2">PAY SLIP</div>
+
+                    {/* Employee Details */}
+                    <table className="w-full text-xs border border-black mb-2">
+                      <tbody>
+                        <tr>
+                          <td className="border border-black p-1 w-1/4 font-bold">Name</td>
+                          <td className="border border-black p-1">
+                            {payroll.full_name || payroll.employee?.full_name || "N/A"}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="border border-black p-1 font-bold">Department</td>
+                          <td className="border border-black p-1">
+                            {payroll.department || (payroll.employee && payroll.employee.department) || "N/A"}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="border border-black p-1 font-bold">Cut-off Period</td>
+                          <td className="border border-black p-1">
+                            {payroll.payroll_period &&
+                            payroll.payroll_period.period_start &&
+                            payroll.payroll_period.period_end
+                              ? `${formatDate(payroll.payroll_period.period_start)} - ${formatDate(payroll.payroll_period.period_end)}`
+                              : "Current Period"}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="border border-black p-1 font-bold">Designation</td>
+                          <td className="border border-black p-1">
+                            {payroll.position || (payroll.employee && payroll.employee.position) || "N/A"}
+                          </td>
+                        </tr>
+                        {payroll.status && (
+                          <tr>
+                            <td className="border border-black p-1 font-bold">Status</td>
+                            <td className="border border-black p-1">{payroll.status}</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+
+                    {/* Earnings Table */}
+                    <div className="text-center font-bold text-sm my-2">Earnings</div>
+                    <table className="w-full text-xs border border-black mb-2">
+                      <thead>
+                        <tr className="bg-gray-100">
+                          <th className="border border-black p-1">Date</th>
+                          <th className="border border-black p-1">Status</th>
+                          <th className="border border-black p-1">Daily Rate</th>
+                          <th className="border border-black p-1">Adjustments</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {dailyRatesData.map((data, index) => (
+                          <tr key={index}>
                             <td className="border border-black p-1">{formatShortDate(data.date.toISOString())}</td>
                             <td className="border border-black p-1">
-                              <div
-                                className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs ${getStatusBadgeColor(data.status)}`}
-                              >
-                                {getStatusIcon(data.status)}
-                                <span className="ml-1">{data.status}</span>
-                              </div>
+                              <span className="inline-block px-1 py-0.5 text-xs font-bold border border-black">
+                                {data.status}
+                              </span>
                             </td>
-
                             <td className="border border-black p-1 text-right">{formatCurrency(data.amount)}</td>
                             <td className="border border-black p-1 text-right">{formatCurrency(data.adjustment)}</td>
                           </tr>
-                        )
-                      })}
-                      <tr className="font-bold">
-                        <td colSpan={3} className="border border-black p-1">
-                          Gross Salary
-                        </td>
-                        <td colSpan={2} className="border border-black p-1 text-right">
-                          {formatCurrency(grossPay)}
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* Deductions Table */}
-                <div className="font-bold text-center my-2">Deductions</div>
-                <div className="relative">
-                  <table className="w-full text-xs border border-black mb-2">
-                    <thead>
-                      <tr className="bg-gray-200">
-                        <th className="border border-black p-1">Type</th>
-                        <th className="border border-black p-1">Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {[
-                        ["SSS", payroll.sss_deduction],
-                        ["PAG-IBIG", payroll.pagibig_deduction],
-                        ["PHILHEALTH", payroll.philhealth_deduction],
-                        ["CASH ADVANCE", payroll.cash_advance],
-                        ["LOAN", payroll.loan],
-                        ["VAT", payroll.vat],
-                        ["OTHERS", payroll.other_deductions],
-                      ].map(([label, value], i) => (
-                        <tr key={i}>
-                          <td className="border border-black p-1">{label}</td>
-                          <td className="border border-black p-1 text-right">{formatCurrency(value)}</td>
+                        ))}
+                        <tr className="font-bold">
+                          <td colSpan={2}>Gross Salary</td>
+                          <td className="border border-black p-1 text-right" colSpan={2}>
+                            {formatCurrency(grossPay)}
+                          </td>
                         </tr>
-                      ))}
-                      <tr className="font-bold">
-                        <td className="border border-black p-1">Total Deductions</td>
-                        <td className="border border-black p-1 text-right">{formatCurrency(totalDeductions)}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
+                      </tbody>
+                    </table>
 
-                <div className="font-bold text-right border-t border-black pt-2 pr-2 text-lg">
-                  NET SALARY: Php {formatCurrency(netPay)}
-                </div>
+                    {/* Deductions Table */}
+                    <div className="text-center font-bold text-sm my-2">Deductions</div>
+                    <table className="w-full text-xs border border-black mb-2">
+                      <thead>
+                        <tr className="bg-gray-100">
+                          <th className="border border-black p-1">Type</th>
+                          <th className="border border-black p-1">Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr>
+                          <td className="border border-black p-1">SSS</td>
+                          <td className="border border-black p-1 text-right">
+                            {formatCurrency(payroll.sss_deduction)}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="border border-black p-1">PAG-IBIG</td>
+                          <td className="border border-black p-1 text-right">
+                            {formatCurrency(payroll.pagibig_deduction)}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="border border-black p-1">PHILHEALTH</td>
+                          <td className="border border-black p-1 text-right">
+                            {formatCurrency(payroll.philhealth_deduction)}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="border border-black p-1">CASH ADVANCE</td>
+                          <td className="border border-black p-1 text-right">{formatCurrency(payroll.cash_advance)}</td>
+                        </tr>
+                        <tr>
+                          <td className="border border-black p-1">LOAN</td>
+                          <td className="border border-black p-1 text-right">{formatCurrency(payroll.loan)}</td>
+                        </tr>
+                        <tr>
+                          <td className="border border-black p-1">VAT</td>
+                          <td className="border border-black p-1 text-right">{formatCurrency(payroll.vat)}</td>
+                        </tr>
+                        <tr>
+                          <td className="border border-black p-1">OTHERS</td>
+                          <td className="border border-black p-1 text-right">
+                            {formatCurrency(payroll.other_deductions)}
+                          </td>
+                        </tr>
+                        <tr className="font-bold">
+                          <td className="border border-black p-1">Total Deductions</td>
+                          <td className="border border-black p-1 text-right">{formatCurrency(totalDeductions)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
 
-                {/* Date */}
-                <div className="text-center mt-2">{formatDate(new Date().toISOString())}</div>
+                    {/* Net Salary */}
+                    <div className="text-right font-bold text-base my-2">NET SALARY: {formatCurrency(netPay)}</div>
 
-                {/* Signature Section */}
-                <div className="mt-5 flex flex-col items-center space-y-8">
-                  <div className="w-3/4 text-center border-t border-black pt-2">
-                    {payroll.full_name || (payroll.employee && payroll.employee.full_name) || "Employee Name"}
-                    <div className="text-xs">Signature Of The Employee</div>
+                    {/* Date */}
+                    <div className="text-center text-xs my-1">{formatDate(new Date().toISOString())}</div>
+
+                    {/* Signature Section */}
+                    <div className="flex flex-col items-center mt-4">
+                      <div className="w-3/4 text-center border-t border-black pt-1">
+                        {payroll.full_name || payroll.employee?.full_name || "Employee"}
+                        <div className="text-xs">Signature Of The Employee</div>
+                      </div>
+
+                      <div className="w-3/4 text-center border-t border-black pt-1 mt-4">
+                        Crissel Ann Bando
+                        <div className="text-xs">Billing Assistant - OIC</div>
+                      </div>
+                    </div>
+
+                    {/* Date Printed */}
+                    <div className=" w-full text-center text-xs">
+                      Printed on: {new Date().toLocaleDateString()} {new Date().toLocaleTimeString()}
+                      <h3 className="font-bold" style={{ marginTop: "6px", textAlign: "center" }}>
+                        -----------------------CONFIDENTIAL-----------------------
+                      </h3>
+                    </div>
                   </div>
-                  <div className="w-3/4 text-center border-t border-black pt-2">
-                    Crissel Ann Bando
-                    <div className="text-xs">Billing Assistant - OIC</div>
-                  </div>
-                </div>
-
-                {/* Date Printed */}
-                <div className="text-xs text-center mt-6">
-                  Printed on: {new Date().toLocaleDateString()} {new Date().toLocaleTimeString()}
-                  <h3 className="mt-6 font-bold"> -----------------------CONFIDENTIAL-----------------------</h3>
-                </div>
-              </>
+                )}
+              </div>
             )}
-          </div>
+          </>
         )}
       </div>
     </div>

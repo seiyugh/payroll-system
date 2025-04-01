@@ -3,8 +3,6 @@
 import type React from "react"
 
 import { useState, useEffect } from "react"
-import { toast } from "sonner"
-import { router } from "@inertiajs/react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -26,15 +24,15 @@ interface Employee {
   assigned_area: string | null
   date_hired: string
   years_of_service: number
-  employment_status: string
+  employment_status: "Regular" | "Probationary" | "Project-Based"
   date_of_regularization: string | null
   status_201: string | null
-  resignation_termination_date: string | null
+  date_terminated_resigned: string | null
   daily_rate: number
   civil_status: string
   gender: string
   birthdate: string
-  birthplace: string
+  birth_place: string
   age: number
   contacts: string
   id_status: string
@@ -44,15 +42,53 @@ interface Employee {
   pagibig_no: string
   emergency_contact_name: string
   emergency_contact_mobile: string
+  // New fields from migration
+  id_no?: string | null
+  ub_account?: string | null
+  resume?: boolean | null
+  government_id?: boolean
+  type_of_id?: "PhilID" | "DL" | "Phi-health" | "SSS" | "UMID" | "POSTAL" | "Passport" | "Voters" | "TIN" | "D1" | null
+  clearance?: "BARANGAY Clearance" | "NBI Clearance" | "Police Clearance" | null
+  id_number?: string | null
+  staff_house?: boolean
+  birth_certificate?: boolean
+  marriage_certificate?: boolean
+  tor?: boolean
+  diploma_hs_college?: boolean
+  contract?: "SIGNED" | "NOT YET" | "REVIEW"
+  performance_evaluation?: boolean
+  medical_cert?: boolean
+  remarks?: string | null
+  email?: string | null
 }
 
 interface UpdateEmployeeModalProps {
   employee: Employee
   onClose: () => void
+  onSubmit: (data: Employee) => void
 }
 
-const UpdateEmployeeModal = ({ employee, onClose }: UpdateEmployeeModalProps) => {
-  const [formData, setFormData] = useState<Employee>({ ...employee })
+const UpdateEmployeeModal = ({ employee, onClose, onSubmit }: UpdateEmployeeModalProps) => {
+  // Add a function to format dates properly
+  const formatDateForInput = (dateString: string | null): string => {
+    if (!dateString) return ""
+
+    // Check if the date is in ISO format with time
+    if (dateString.includes("T")) {
+      return dateString.split("T")[0]
+    }
+
+    return dateString
+  }
+
+  // Update the useState initialization to format dates
+  const [formData, setFormData] = useState<Employee>({
+    ...employee,
+    birthdate: formatDateForInput(employee.birthdate),
+    date_hired: formatDateForInput(employee.date_hired),
+    date_of_regularization: formatDateForInput(employee.date_of_regularization),
+    date_terminated_resigned: formatDateForInput(employee.date_terminated_resigned),
+  })
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [activeTab, setActiveTab] = useState("personal")
   const [errors, setErrors] = useState<Record<string, string>>({})
@@ -65,7 +101,7 @@ const UpdateEmployeeModal = ({ employee, onClose }: UpdateEmployeeModalProps) =>
     }))
   }, [formData.first_name, formData.middle_name, formData.last_name])
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target
 
     setFormData((prev) => ({
@@ -81,72 +117,44 @@ const UpdateEmployeeModal = ({ employee, onClose }: UpdateEmployeeModalProps) =>
     }))
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-    setIsSubmitting(true)
-    setErrors({})
-
-    console.log("Submitting update for employee ID:", formData.id, "with employee number:", formData.employee_number)
-
-    router.put(`/employees/${formData.id}`, formData, {
-      onSuccess: () => {
-        toast.success("Employee updated successfully!")
-        onClose()
-      },
-      onError: (errors) => {
-        setErrors(errors)
-
-        // Find which tab has errors and switch to it
-        const personalFields = [
-          "first_name",
-          "last_name",
-          "middle_name",
-          "civil_status",
-          "gender",
-          "birthdate",
-          "birthplace",
-          "age",
-          "address",
-        ]
-        const employmentFields = [
-          "employee_number",
-          "position",
-          "department",
-          "assigned_area",
-          "date_hired",
-          "employment_status",
-          "date_of_regularization",
-          "daily_rate",
-          "years_of_service",
-        ]
-        const governmentFields = ["sss_no", "tin_no", "philhealth_no", "pagibig_no", "status_201", "id_status"]
-        const emergencyFields = ["emergency_contact_name", "emergency_contact_mobile"]
-
-        const errorFields = Object.keys(errors)
-
-        if (errorFields.some((field) => personalFields.includes(field))) {
-          setActiveTab("personal")
-        } else if (errorFields.some((field) => employmentFields.includes(field))) {
-          setActiveTab("employment")
-        } else if (errorFields.some((field) => governmentFields.includes(field))) {
-          setActiveTab("government")
-        } else if (errorFields.some((field) => emergencyFields.includes(field))) {
-          setActiveTab("emergency")
-        }
-
-        // Show first error in toast
-        if (errorFields.length > 0) {
-          const firstField = errorFields[0]
-          toast.error(`${firstField}: ${errors[firstField]}`)
-        }
-
-        setIsSubmitting(false)
-      },
-      onFinish: () => {
-        setIsSubmitting(false)
-      },
-    })
+  const handleCheckboxChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, checked } = e.target
+    setFormData((prev) => ({
+      ...prev,
+      [name]: checked,
+    }))
   }
+
+  // Update the handleSubmit function to use direct path instead of route
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+    setErrors({});
+  
+    console.log("Starting employee update process...");
+    console.log("Employee ID being updated:", formData.id);
+    console.log("Employee number being submitted:", formData.employee_number);
+    console.log("Update URL:", `/employees/${formData.id}`);
+    console.log("Full form data being submitted:", formData);
+  
+    // Create a copy of formData with mapped fields
+    const submissionData = {
+      ...formData,
+      birthplace: formData.birth_place, // Map birth_place to birthplace
+      resignation_termination_date: formData.date_terminated_resigned, // Map date_terminated_resigned
+    };
+  
+    console.log("Final submission data:", submissionData);
+  
+    // Simulate submission (Remove this if connecting to backend)
+    setTimeout(() => {
+      console.log("Simulated submission complete.");
+      setIsSubmitting(false); // Re-enable button after "submission"
+    }, 900);
+  
+    onSubmit(submissionData);
+  };
+  
 
   return (
     <Dialog open={true} onOpenChange={onClose}>
@@ -157,7 +165,7 @@ const UpdateEmployeeModal = ({ employee, onClose }: UpdateEmployeeModalProps) =>
 
         <form onSubmit={handleSubmit} className="space-y-6">
           <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="grid grid-cols-4 mb-6">
+            <TabsList className="grid grid-cols-5 mb-6">
               <TabsTrigger value="personal" className="flex items-center gap-2">
                 <User className="h-4 w-4" />
                 <span className="hidden sm:inline">Personal</span>
@@ -173,6 +181,10 @@ const UpdateEmployeeModal = ({ employee, onClose }: UpdateEmployeeModalProps) =>
               <TabsTrigger value="emergency" className="flex items-center gap-2">
                 <Phone className="h-4 w-4" />
                 <span className="hidden sm:inline">Emergency</span>
+              </TabsTrigger>
+              <TabsTrigger value="documents" className="flex items-center gap-2">
+                <FileText className="h-4 w-4" />
+                <span className="hidden sm:inline">Documents</span>
               </TabsTrigger>
             </TabsList>
 
@@ -280,18 +292,18 @@ const UpdateEmployeeModal = ({ employee, onClose }: UpdateEmployeeModalProps) =>
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="birthplace">Birthplace</Label>
+                  <Label htmlFor="birth_place">Birthplace</Label>
                   <div className="flex items-center">
                     <MapPin className="h-4 w-4 mr-2 text-muted-foreground" />
                     <Input
-                      id="birthplace"
-                      name="birthplace"
-                      value={formData.birthplace}
+                      id="birth_place"
+                      name="birth_place"
+                      value={formData.birth_place}
                       onChange={handleChange}
-                      className={errors.birthplace ? "border-red-500" : ""}
+                      className={errors.birth_place ? "border-red-500" : ""}
                     />
                   </div>
-                  {errors.birthplace && <p className="text-red-500 text-xs">{errors.birthplace}</p>}
+                  {errors.birth_place && <p className="text-red-500 text-xs">{errors.birth_place}</p>}
                 </div>
 
                 <div className="space-y-2">
@@ -336,6 +348,19 @@ const UpdateEmployeeModal = ({ employee, onClose }: UpdateEmployeeModalProps) =>
                   </div>
                   {errors.contacts && <p className="text-red-500 text-xs">{errors.contacts}</p>}
                 </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="email">Email</Label>
+                  <Input
+                    id="email"
+                    name="email"
+                    type="email"
+                    value={formData.email || ""}
+                    onChange={handleChange}
+                    className={errors.email ? "border-red-500" : ""}
+                  />
+                  {errors.email && <p className="text-red-500 text-xs">{errors.email}</p>}
+                </div>
               </div>
             </TabsContent>
 
@@ -376,13 +401,22 @@ const UpdateEmployeeModal = ({ employee, onClose }: UpdateEmployeeModalProps) =>
 
                 <div className="space-y-2">
                   <Label htmlFor="department">Department</Label>
-                  <Input
-                    id="department"
-                    name="department"
+                  <Select
                     value={formData.department}
-                    onChange={handleChange}
-                    className={errors.department ? "border-red-500" : ""}
-                  />
+                    onValueChange={(value) => handleSelectChange(value, "department")}
+                  >
+                    <SelectTrigger className={errors.department ? "border-red-500" : ""}>
+                      <SelectValue placeholder="Select department" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Administration">Administration</SelectItem>
+                      <SelectItem value="Human Resources">Human Resources</SelectItem>
+                      <SelectItem value="Finance">Finance</SelectItem>
+                      <SelectItem value="Operations">Operations</SelectItem>
+                      <SelectItem value="Allen One">Allen One</SelectItem>
+                      <SelectItem value="Technical">Technical</SelectItem>
+                    </SelectContent>
+                  </Select>
                   {errors.department && <p className="text-red-500 text-xs">{errors.department}</p>}
                 </div>
 
@@ -429,9 +463,7 @@ const UpdateEmployeeModal = ({ employee, onClose }: UpdateEmployeeModalProps) =>
                     <SelectContent>
                       <SelectItem value="Probationary">Probationary</SelectItem>
                       <SelectItem value="Regular">Regular</SelectItem>
-                      <SelectItem value="Contractual">Contractual</SelectItem>
-                      <SelectItem value="Resigned">Resigned</SelectItem>
-                      <SelectItem value="Terminated">Terminated</SelectItem>
+                      <SelectItem value="Project-Based">Project-Based</SelectItem>
                     </SelectContent>
                   </Select>
                   {errors.employment_status && <p className="text-red-500 text-xs">{errors.employment_status}</p>}
@@ -457,18 +489,14 @@ const UpdateEmployeeModal = ({ employee, onClose }: UpdateEmployeeModalProps) =>
 
                 <div className="space-y-2">
                   <Label htmlFor="daily_rate">Daily Rate</Label>
-                  <Select
-                    value={String(formData.daily_rate)}
-                    onValueChange={(value) => handleSelectChange(value, "daily_rate")}
-                  >
-                    <SelectTrigger className={errors.daily_rate ? "border-red-500" : ""}>
-                      <SelectValue placeholder="Select rate" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="600">600</SelectItem>
-                      <SelectItem value="650">650</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Input
+                    id="daily_rate"
+                    type="number"
+                    name="daily_rate"
+                    value={formData.daily_rate}
+                    onChange={handleChange}
+                    className={errors.daily_rate ? "border-red-500" : ""}
+                  />
                   {errors.daily_rate && <p className="text-red-500 text-xs">{errors.daily_rate}</p>}
                 </div>
 
@@ -486,20 +514,20 @@ const UpdateEmployeeModal = ({ employee, onClose }: UpdateEmployeeModalProps) =>
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="resignation_termination_date">Resignation/Termination Date</Label>
+                  <Label htmlFor="date_terminated_resigned">Resignation/Termination Date</Label>
                   <div className="flex items-center">
                     <CalendarDays className="h-4 w-4 mr-2 text-muted-foreground" />
                     <Input
-                      id="resignation_termination_date"
+                      id="date_terminated_resigned"
                       type="date"
-                      name="resignation_termination_date"
-                      value={formData.resignation_termination_date || ""}
+                      name="date_terminated_resigned"
+                      value={formData.date_terminated_resigned || ""}
                       onChange={handleChange}
-                      className={errors.resignation_termination_date ? "border-red-500" : ""}
+                      className={errors.date_terminated_resigned ? "border-red-500" : ""}
                     />
                   </div>
-                  {errors.resignation_termination_date && (
-                    <p className="text-red-500 text-xs">{errors.resignation_termination_date}</p>
+                  {errors.date_terminated_resigned && (
+                    <p className="text-red-500 text-xs">{errors.date_terminated_resigned}</p>
                   )}
                 </div>
 
@@ -624,6 +652,252 @@ const UpdateEmployeeModal = ({ employee, onClose }: UpdateEmployeeModalProps) =>
                   {errors.emergency_contact_mobile && (
                     <p className="text-red-500 text-xs">{errors.emergency_contact_mobile}</p>
                   )}
+                </div>
+              </div>
+            </TabsContent>
+            {/* Documents Tab */}
+            <TabsContent value="documents" className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="id_no">ID Number</Label>
+                  <Input
+                    id="id_no"
+                    name="id_no"
+                    value={formData.id_no || ""}
+                    onChange={handleChange}
+                    className={errors.id_no ? "border-red-500" : ""}
+                  />
+                  {errors.id_no && <p className="text-red-500 text-xs">{errors.id_no}</p>}
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="ub_account">UB Account</Label>
+                  <Input
+                    id="ub_account"
+                    name="ub_account"
+                    value={formData.ub_account || ""}
+                    onChange={handleChange}
+                    className={errors.ub_account ? "border-red-500" : ""}
+                  />
+                  {errors.ub_account && <p className="text-red-500 text-xs">{errors.ub_account}</p>}
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="type_of_id">Type of ID</Label>
+                  <Select
+                    value={formData.type_of_id || ""}
+                    onValueChange={(value) => handleSelectChange(value, "type_of_id")}
+                  >
+                    <SelectTrigger className={errors.type_of_id ? "border-red-500" : ""}>
+                      <SelectValue placeholder="Select ID Type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="PhilID">PhilID</SelectItem>
+                      <SelectItem value="DL">Driver's License</SelectItem>
+                      <SelectItem value="Phi-health">PhilHealth</SelectItem>
+                      <SelectItem value="SSS">SSS</SelectItem>
+                      <SelectItem value="UMID">UMID</SelectItem>
+                      <SelectItem value="POSTAL">Postal ID</SelectItem>
+                      <SelectItem value="Passport">Passport</SelectItem>
+                      <SelectItem value="Voters">Voter's ID</SelectItem>
+                      <SelectItem value="TIN">TIN ID</SelectItem>
+                      <SelectItem value="D1">D1</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {errors.type_of_id && <p className="text-red-500 text-xs">{errors.type_of_id}</p>}
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="id_number">ID Number</Label>
+                  <Input
+                    id="id_number"
+                    name="id_number"
+                    value={formData.id_number || ""}
+                    onChange={handleChange}
+                    className={errors.id_number ? "border-red-500" : ""}
+                  />
+                  {errors.id_number && <p className="text-red-500 text-xs">{errors.id_number}</p>}
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="clearance">Clearance</Label>
+                  <Select
+                    value={formData.clearance || ""}
+                    onValueChange={(value) => handleSelectChange(value, "clearance")}
+                  >
+                    <SelectTrigger className={errors.clearance ? "border-red-500" : ""}>
+                      <SelectValue placeholder="Select Clearance Type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="BARANGAY Clearance">Barangay Clearance</SelectItem>
+                      <SelectItem value="NBI Clearance">NBI Clearance</SelectItem>
+                      <SelectItem value="Police Clearance">Police Clearance</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {errors.clearance && <p className="text-red-500 text-xs">{errors.clearance}</p>}
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="contract">Contract Status</Label>
+                  <Select
+                    value={formData.contract || "NOT YET"}
+                    onValueChange={(value) => handleSelectChange(value, "contract")}
+                  >
+                    <SelectTrigger className={errors.contract ? "border-red-500" : ""}>
+                      <SelectValue placeholder="Select Contract Status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="SIGNED">Signed</SelectItem>
+                      <SelectItem value="NOT YET">Not Yet</SelectItem>
+                      <SelectItem value="REVIEW">Under Review</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {errors.contract && <p className="text-red-500 text-xs">{errors.contract}</p>}
+                </div>
+
+                <div className="lg:col-span-3 space-y-2">
+                  <Label>Document Checklist</Label>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4 border rounded-md">
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        id="government_id"
+                        name="government_id"
+                        checked={formData.government_id || false}
+                        onChange={handleCheckboxChange}
+                        className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <Label htmlFor="government_id" className="text-sm font-medium text-gray-700">
+                        Government ID
+                      </Label>
+                    </div>
+
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        id="staff_house"
+                        name="staff_house"
+                        checked={formData.staff_house || false}
+                        onChange={handleCheckboxChange}
+                        className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <Label htmlFor="staff_house" className="text-sm font-medium text-gray-700">
+                        Staff House
+                      </Label>
+                    </div>
+
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        id="birth_certificate"
+                        name="birth_certificate"
+                        checked={formData.birth_certificate || false}
+                        onChange={handleCheckboxChange}
+                        className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <Label htmlFor="birth_certificate" className="text-sm font-medium text-gray-700">
+                        Birth Certificate
+                      </Label>
+                    </div>
+
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        id="marriage_certificate"
+                        name="marriage_certificate"
+                        checked={formData.marriage_certificate || false}
+                        onChange={handleCheckboxChange}
+                        className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <Label htmlFor="marriage_certificate" className="text-sm font-medium text-gray-700">
+                        Marriage Certificate
+                      </Label>
+                    </div>
+
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        id="tor"
+                        name="tor"
+                        checked={formData.tor || false}
+                        onChange={handleCheckboxChange}
+                        className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <Label htmlFor="tor" className="text-sm font-medium text-gray-700">
+                        Transcript of Records
+                      </Label>
+                    </div>
+
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        id="diploma_hs_college"
+                        name="diploma_hs_college"
+                        checked={formData.diploma_hs_college || false}
+                        onChange={handleCheckboxChange}
+                        className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <Label htmlFor="diploma_hs_college" className="text-sm font-medium text-gray-700">
+                        Diploma (HS/College)
+                      </Label>
+                    </div>
+
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        id="performance_evaluation"
+                        name="performance_evaluation"
+                        checked={formData.performance_evaluation || false}
+                        onChange={handleCheckboxChange}
+                        className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <Label htmlFor="performance_evaluation" className="text-sm font-medium text-gray-700">
+                        Performance Evaluation
+                      </Label>
+                    </div>
+
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        id="medical_cert"
+                        name="medical_cert"
+                        checked={formData.medical_cert || false}
+                        onChange={handleCheckboxChange}
+                        className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <Label htmlFor="medical_cert" className="text-sm font-medium text-gray-700">
+                        Medical Certificate
+                      </Label>
+                    </div>
+
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        id="resume"
+                        name="resume"
+                        checked={formData.resume || false}
+                        onChange={handleCheckboxChange}
+                        className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <Label htmlFor="resume" className="text-sm font-medium text-gray-700">
+                        Resume
+                      </Label>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="lg:col-span-3 space-y-2">
+                  <Label htmlFor="remarks">Remarks</Label>
+                  <textarea
+                    id="remarks"
+                    name="remarks"
+                    value={formData.remarks || ""}
+                    onChange={handleChange}
+                    className={`w-full p-2 border rounded min-h-[100px] ${
+                      errors.remarks ? "border-red-500" : "border-gray-300"
+                    }`}
+                  />
+                  {errors.remarks && <p className="text-red-500 text-xs">{errors.remarks}</p>}
                 </div>
               </div>
             </TabsContent>

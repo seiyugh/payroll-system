@@ -38,7 +38,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { debounce } from "lodash"
-import BulkDeleteAttendanceModal from "./BulkDeleteAttendanceModal"
 
 interface Attendance {
   id: number
@@ -355,18 +354,7 @@ const AttendanceIndex = ({
   const attendanceData = attendances.data || []
 
   // Debug function to check data
-  useEffect(() => {
-    console.log("Attendance Data:", attendanceData)
-    if (attendanceData.length > 0) {
-      console.log("Sample attendance record:", attendanceData[0])
-      console.log("Fields available:", Object.keys(attendanceData[0]))
-    }
-    console.log("Employees:", employees)
-
-    // Create debug info string
-    const info = `Attendance Records: ${attendanceData.length}, Employees: ${employees.length}`
-    setDebugInfo(info)
-  }, [attendanceData, employees])
+ 
 
   // Generate weekly attendance data for analytics
   useEffect(() => {
@@ -848,24 +836,36 @@ const AttendanceIndex = ({
     window.location.href = "/attendance/export"
   }
 
+  // Replace the existing calculatePayAmount function with this updated version
+  // that implements the specified calculations for different attendance statuses
+
   // Calculate pay amount based on status and daily rate
   const calculatePayAmount = (record: Attendance) => {
     const dailyRate = Number.parseFloat(record.daily_rate?.toString() || "0") || 0
 
     switch (record.status) {
       case "Present":
-        return dailyRate
-      case "Half Day":
-        return dailyRate / 2
+        return dailyRate * 1 // Present * 1
       case "Absent":
+        return dailyRate * 0 // Absent * 0
       case "Day Off":
-        return 0
+        return dailyRate * 0 // Day Off * 0
+      case "Half Day":
+        return dailyRate / 2 // Half Day / 2
       case "Holiday":
-        return dailyRate // Usually paid for holidays
+        // For simplicity, we'll use the higher rate (special holiday)
+        // In a real implementation, you might want to add a field to distinguish between regular and special holidays
+        return dailyRate * 2 // Special holiday * 2
+      // Uncomment the following for regular holiday calculation
+      // return dailyRate * 1.3
       case "Leave":
-        return dailyRate // Paid leave
+        return dailyRate * 0 // Leave * 0
+      case "WFH":
+        return dailyRate * 1 // WFH * 1
+      case "SP":
+        return dailyRate * 1 // SP * 1
       default:
-        return dailyRate
+        return 0
     }
   }
 
@@ -2815,35 +2815,46 @@ const AttendanceIndex = ({
                   </SelectContent>
                 </Select>
               </div>
-
-              <div>
-                <Label htmlFor="bulk-employee">Employee (Optional)</Label>
-                <Select value={selectedEmployeeForView} onValueChange={setSelectedEmployeeForView}>
-                  <SelectTrigger id="bulk-employee" className="mt-1">
-                    <SelectValue placeholder="All employees" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All employees</SelectItem>
-                    {employees.map((employee) => (
-                      <SelectItem key={employee.id} value={employee.id.toString()}>
-                        {employee.full_name} ({employee.employee_number})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-slate-500 mt-1">Leave as "All employees" to update all employees</p>
-              </div>
             </div>
 
             <DialogFooter>
               <Button variant="outline" onClick={() => setShowBulkDialog(false)}>
                 Cancel
               </Button>
-              <Button onClick={handleBulkUpdate}>Update Records</Button>
+              <Button onClick={handleBulkUpdate}>Update Attendance</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
-        {isBulkDeleteModalOpen && <BulkDeleteAttendanceModal onClose={closeBulkDeleteModal} employees={employees} />}
+
+        {/* Bulk Delete Dialog */}
+        <Dialog open={isBulkDeleteModalOpen} onOpenChange={setIsBulkDeleteModalOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Bulk Delete Attendance Records</DialogTitle>
+              <DialogDescription>
+                Are you sure you want to delete all attendance records? This action cannot be undone.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="py-4">
+              <p className="text-red-500">
+                <AlertCircle className="inline-block h-5 w-5 mr-2 align-middle" />
+                Warning: This will permanently delete all attendance records.
+              </p>
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={closeBulkDeleteModal}>
+                Cancel
+              </Button>
+              <Button variant="destructive" onClick={() => {}}>
+                Delete All Records
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+       
       </div>
     </AppLayout>
   )

@@ -13,7 +13,6 @@ import {
   ArrowDownUp,
   Calendar,
   FileText,
-  Plus,
   Printer,
   Wallet,
   AlertCircle,
@@ -22,6 +21,10 @@ import {
   RefreshCw,
   FileSpreadsheet,
   Mail,
+  Check,
+  X,
+  Clock,
+  DollarSign,
 } from "lucide-react"
 import AddPayrollModal from "./AddPayrollModal"
 import UpdatePayrollModal from "./UpdatePayrollModal"
@@ -30,6 +33,7 @@ import { toast } from "sonner"
 import PrintPayslip from "./PrintPayslip"
 import { Progress } from "@/components/ui/progress"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 
 // Import the export utility
 import { exportToCSV } from "../../utils/export-utils"
@@ -102,6 +106,31 @@ interface PeriodSelectProps {
   handlePeriodFilterChange: (value: number | null) => void
 }
 
+// Define status columns for drag and drop
+const statusColumns = [
+  { id: "pending", title: "Pending", icon: <Clock className="h-4 w-4" /> },
+  { id: "generated", title: "Generated", icon: <FileText className="h-4 w-4" /> },
+  { id: "approved", title: "Approved", icon: <Check className="h-4 w-4" /> },
+  { id: "paid", title: "Paid", icon: <DollarSign className="h-4 w-4" /> },
+  { id: "rejected", title: "Rejected", icon: <X className="h-4 w-4" /> },
+]
+
+// Update the status badge color function to use black/white
+const getStatusBadgeColor = (status: string) => {
+  switch (status.toLowerCase()) {
+    case "approved":
+    case "paid":
+      return "bg-white text-black border-gray-200 dark:bg-black dark:text-white dark:border-gray-800"
+    case "pending":
+    case "generated":
+      return "bg-white text-black border-gray-200 dark:bg-black dark:text-white dark:border-gray-800"
+    case "rejected":
+      return "bg-white text-black border-gray-200 dark:bg-black dark:text-white dark:border-gray-800"
+    default:
+      return "bg-white text-black border-gray-200 dark:bg-black dark:text-white dark:border-gray-800"
+  }
+}
+
 const PayrollIndex = ({
   payrollEntries = {
     data: [],
@@ -132,7 +161,7 @@ const PayrollIndex = ({
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false)
   const [selectedPayroll, setSelectedPayroll] = useState<PayrollEntry | null>(null)
-  const [activeTab, setActiveTab] = useState<"entries" | "periods">("entries")
+  const [activeTab, setActiveTab] = useState<"entries" | "periods" | "kanban">("entries")
   const [sortField, setSortField] = useState<string>("id")
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc")
   const [isLoading, setIsLoading] = useState(true)
@@ -152,6 +181,7 @@ const PayrollIndex = ({
   const [dateFilter, setDateFilter] = useState<string | null>(null)
   const [dailyViewDateFilter, setDailyViewDateFilter] = useState<string>("")
   const [filters, setFilters] = useState<{ search?: string; status?: string; date?: string }>({})
+  const [draggedPayroll, setDraggedPayroll] = useState<PayrollEntry | null>(null)
 
   const { route } = usePage().props
 
@@ -371,21 +401,6 @@ const PayrollIndex = ({
     }
   }
 
-  const getStatusBadgeColor = (status: string) => {
-    switch (status.toLowerCase()) {
-      case "approved":
-      case "paid":
-        return "bg-green-50 text-green-700 border-green-200 dark:bg-green-900/20 dark:text-green-400 dark:border-green-800"
-      case "pending":
-      case "generated":
-        return "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-800"
-      case "rejected":
-        return "bg-red-50 text-red-700 border-red-200 dark:bg-red-900/20 dark:text-red-400 dark:border-red-800"
-      default:
-        return "bg-slate-50 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700"
-    }
-  }
-
   // Improved sort toggle with type safety
   const toggleSort = (field: string) => {
     setSortField(field)
@@ -460,7 +475,7 @@ const PayrollIndex = ({
     )
   }
 
-  // Replace the refreshData function with Inertia reload
+  // Update the refreshData function to preserve the active tab
   const refreshData = () => {
     setIsRefreshing(true)
 
@@ -473,6 +488,7 @@ const PayrollIndex = ({
 
     router.visit(`/payroll?${new URLSearchParams(params).toString()}`, {
       preserveScroll: true,
+      preserveState: true,
       onSuccess: () => {
         setIsRefreshing(false)
         toast.success("Data refreshed successfully")
@@ -637,10 +653,32 @@ const PayrollIndex = ({
     })
   }
 
-  // Mock attendanceData, summaryDateFilter, and calculatePayAmount for demonstration
+  // Update the calculatePayAmount function to ensure it correctly applies the attendance status logic
+  // Replace the existing calculatePayAmount function with this updated version:
+
   const calculatePayAmount = (attendance) => {
-    // Replace with your actual calculation logic
-    return Number.parseFloat(attendance.daily_rate?.toString() || "0") || 0
+    const dailyRate = Number.parseFloat(attendance.daily_rate?.toString() || "0") || 0
+
+    switch (attendance.status) {
+      case "Present":
+        return dailyRate * 1 // Present * 1
+      case "Absent":
+        return dailyRate * 0 // Absent * 0
+      case "Day Off":
+        return dailyRate * 0 // Day Off * 0
+      case "Half Day":
+        return dailyRate / 2 // Half Day / 2
+      case "Holiday":
+        return dailyRate * 2 // Holiday * 2 (using the special holiday rate)
+      case "Leave":
+        return dailyRate * 0 // Leave * 0
+      case "WFH":
+        return dailyRate * 1 // WFH (Work From Home) * 1
+      case "SP":
+        return dailyRate * 1 // SP (Special Project) * 1
+      default:
+        return 0
+    }
   }
 
   // Update the filter handling for status filter
@@ -661,8 +699,50 @@ const PayrollIndex = ({
     })
   }
 
-  // Update handlePeriodFilterChange to use the improved approach
+  // Replace the existing useEffect for setting the latest period with this improved version
+  // that only sets it on initial load and respects user selections
+
+  // Add this state to track if the initial load has happened
+  const [initialLoadComplete, setInitialLoadComplete] = useState(false)
+
+  // Update the useEffect to set the latest period only on initial load
+  useEffect(() => {
+    // Only set the default period if:
+    // 1. Initial load hasn't been completed yet
+    // 2. No period is already selected
+    // 3. payrollPeriods is available
+    if (!initialLoadComplete && !periodFilter && Array.isArray(payrollPeriods) && payrollPeriods.length > 0) {
+      // Find the latest period by comparing period_end dates
+      const latestPeriod = payrollPeriods.reduce((latest, current) => {
+        const latestDate = new Date(latest.period_end)
+        const currentDate = new Date(current.period_end)
+        return currentDate > latestDate ? current : latest
+      }, payrollPeriods[0])
+
+      // Set the latest period as the filter
+      setPeriodFilter(latestPeriod.week_id)
+
+      // Update URL to reflect the selected period
+      const params = new URLSearchParams(window.location.search)
+      params.set("period", latestPeriod.week_id.toString())
+
+      router.visit(`/payroll?${params.toString()}`, {
+        preserveState: true,
+        preserveScroll: true,
+        only: ["payrollEntries", "payrollPeriods", "payrollSummary"],
+        replace: true, // Use replace to avoid adding to browser history
+      })
+
+      // Mark initial load as complete
+      setInitialLoadComplete(true)
+    }
+  }, [payrollPeriods, periodFilter, initialLoadComplete])
+
+  // Update the handlePeriodFilterChange function to properly handle "All Periods" selection
   const handlePeriodFilterChange = (newValue: number | null) => {
+    // Mark initial load as complete whenever the user makes an explicit selection
+    setInitialLoadComplete(true)
+
     if (!newValue) {
       setPeriodFilter(null)
 
@@ -708,37 +788,13 @@ const PayrollIndex = ({
     }
   }
 
-  // Update the clear filters function
-  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value
-    setSearchTerm(value)
-
-    // Apply filters after typing stops (500ms delay)
-    const timer = setTimeout(() => {
-      const params = new URLSearchParams(window.location.search)
-      if (value) {
-        params.set("search", value)
-      } else {
-        params.delete("search")
-      }
-
-      // Use router.visit instead of applyFilters to maintain the input value
-      router.visit(`/payroll?${params.toString()}`, {
-        preserveState: true,
-        preserveScroll: true,
-        only: ["payrollEntries", "payrollPeriods", "payrollSummary"],
-      })
-    }, 500)
-
-    return () => clearTimeout(timer)
-  }
-
-  // Update handleClearFilters to properly clear the URL parameters too
+  // Update handleClearFilters to properly clear the period filter
   const handleClearFilters = () => {
     setSearchTerm("")
     setStatusFilter(null)
     setPeriodFilter(null)
     setDepartmentFilter(null)
+    setInitialLoadComplete(true) // Mark initial load as complete when filters are cleared
 
     // Clear URL parameters and reload data
     router.visit("/payroll", {
@@ -746,6 +802,11 @@ const PayrollIndex = ({
       preserveScroll: true,
       only: ["payrollEntries", "payrollPeriods", "payrollSummary"],
     })
+  }
+
+  // Declare handleSearchChange
+  const handleSearchChange = (e) => {
+    setSearchTerm(e.target.value)
   }
 
   const PeriodSelect: React.FC<PeriodSelectProps> = ({ periodData, periodFilter, handlePeriodFilterChange }) => {
@@ -823,10 +884,24 @@ const PayrollIndex = ({
     }
   }
 
+  // Make sure this function is used when generating payroll by adding the attendance_rules to the handleGeneratePayroll function:
+
   const handleGeneratePayroll = (weekId) => {
     router.post(
       "/payroll/generate",
-      { week_id: weekId },
+      {
+        week_id: weekId,
+        attendance_rules: {
+          Present: 1.0, // Daily rate * 1
+          Absent: 0.0, // Daily rate * 0
+          "Day Off": 0.0, // Daily rate * 0
+          "Half Day": 0.5, // Daily rate / 2
+          Holiday: 2.0, // Daily rate * 2
+          Leave: 0.0, // Daily rate * 0
+          WFH: 1.0, // Daily rate * 1
+          SP: 1.0, // Daily rate * 1
+        },
+      },
       {
         onSuccess: () => {
           toast.success("Payroll generated successfully for this period!")
@@ -855,6 +930,82 @@ const PayrollIndex = ({
       preserveScroll: true,
       only: ["payrollEntries"],
     })
+  }
+
+  // Update the handleStatusChange function to make changes instant without confirmation
+  const handleStatusChange = (payroll: PayrollEntry, newStatus: string) => {
+    if (payroll.status === newStatus) return
+
+    // Apply the change immediately without confirmation
+    router.put(
+      `/payroll/${payroll.id}`,
+      {
+        ...payroll,
+        status: newStatus,
+      },
+      {
+        onSuccess: () => {
+          toast.success(`Status updated to ${newStatus}!`)
+          refreshData()
+        },
+        onError: (errors) => {
+          Object.entries(errors).forEach(([field, message]) => {
+            toast.error(`${field}: ${message}`)
+          })
+        },
+        preserveState: true,
+        preserveScroll: true,
+      },
+    )
+  }
+
+  // Update the handleDrop function to make changes instant
+  const handleDrop = (e, status: string) => {
+    e.preventDefault()
+
+    if (!draggedPayroll) return
+
+    // Only update if status is different
+    if (draggedPayroll.status.toLowerCase() !== status.toLowerCase()) {
+      // Apply the change immediately
+      router.put(
+        `/payroll/${draggedPayroll.id}`,
+        {
+          ...draggedPayroll,
+          status: status,
+        },
+        {
+          onSuccess: () => {
+            toast.success(`Status updated to ${status}!`)
+            refreshData()
+          },
+          onError: (errors) => {
+            Object.entries(errors).forEach(([field, message]) => {
+              toast.error(`${field}: ${message}`)
+            })
+          },
+          preserveState: true,
+          preserveScroll: true,
+        },
+      )
+    }
+
+    setDraggedPayroll(null)
+  }
+
+  // Remove the confirmStatusChange function since we're no longer using it
+  // Delete the entire confirmStatusChange function
+
+  // Drag and drop handlers
+  const handleDragStart = (e, payroll: PayrollEntry) => {
+    setDraggedPayroll(payroll)
+    e.dataTransfer.setData("text/plain", JSON.stringify(payroll))
+    e.dataTransfer.effectAllowed = "move"
+  }
+
+  const handleDragOver = (e, status: string) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = "move"
   }
 
   const payrollData = payrollEntries?.data || []
@@ -891,8 +1042,28 @@ const PayrollIndex = ({
       })
   }, [payrollData, searchTerm, statusFilter, periodFilter, departmentFilter, sortField, sortDirection])
 
-  // Remove the payrollSummaryData calculation since we're now using the server-provided payrollSummary
-  // Delete this block:
+  // Group payrolls by status for kanban view
+  const payrollsByStatus = useMemo(() => {
+    const result = {}
+
+    // Initialize all status columns
+    statusColumns.forEach((column) => {
+      result[column.id] = []
+    })
+
+    // Populate with filtered payrolls
+    filteredPayrolls.forEach((payroll) => {
+      const status = payroll.status.toLowerCase()
+      if (result[status]) {
+        result[status].push(payroll)
+      } else {
+        // If status doesn't match our predefined columns, add to pending
+        result["pending"].push(payroll)
+      }
+    })
+
+    return result
+  }, [filteredPayrolls])
 
   useEffect(() => {
     // Set up a timer to delay the search
@@ -960,6 +1131,8 @@ const PayrollIndex = ({
     )
   }
 
+  // Add this useEffect to set the latest period as default on initial load
+
   return (
     <AppLayout
       breadcrumbs={[
@@ -977,15 +1150,6 @@ const PayrollIndex = ({
             <p className="text-slate-600 dark:text-slate-400">Manage employee payroll and payment periods</p>
           </div>
           <div className="flex flex-wrap gap-2 mt-4 md:mt-0">
-            <Button
-              variant="outline"
-              onClick={openAddModal}
-              className="border-indigo-200 text-indigo-600  hover:border-indigo-300 dark:border-indigo-800 dark:text-indigo-400 dark:hover:border-indigo-700"
-            >
-              <Plus className="h-4 w-4 mr-1" />
-              Add Payroll
-            </Button>
-            
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -1028,7 +1192,7 @@ const PayrollIndex = ({
                   {payrollSummary.totalCount}
                 </p>
               </div>
-              <div className="p-2 rounded-full bg-indigo-50 text-indigo-500 dark:bg-indigo-900/20 dark:text-indigo-400 group-hover:bg-indigo-100 dark:group-hover:bg-indigo-800/30 transition-colors">
+              <div className="p-2 rounded-full bg-gray-100 text-black dark:bg-gray-900 dark:text-white group-hover:bg-gray-200 dark:group-hover:bg-gray-800 transition-colors">
                 <FileText className="h-5 w-5" />
               </div>
             </div>
@@ -1056,7 +1220,7 @@ const PayrollIndex = ({
                   })}
                 </p>
               </div>
-              <div className="p-2 rounded-full bg-green-50 text-green-500 dark:bg-green-900/20 dark:text-green-400 group-hover:bg-green-100 dark:group-hover:bg-green-800/30 transition-colors">
+              <div className="p-2 rounded-full bg-gray-100 text-black dark:bg-gray-900 dark:text-white group-hover:bg-gray-200 dark:group-hover:bg-gray-800 transition-colors">
                 <Wallet className="h-5 w-5" />
               </div>
             </div>
@@ -1088,7 +1252,7 @@ const PayrollIndex = ({
                   })}
                 </p>
               </div>
-              <div className="p-2 rounded-full bg-blue-50 text-blue-500 dark:bg-blue-900/20 dark:text-blue-400 group-hover:bg-blue-100 dark:group-hover:bg-blue-800/30 transition-colors">
+              <div className="p-2 rounded-full bg-gray-100 text-black dark:bg-gray-900 dark:text-white group-hover:bg-gray-200 dark:group-hover:bg-gray-800 transition-colors">
                 <Wallet className="h-5 w-5" />
               </div>
             </div>
@@ -1127,7 +1291,7 @@ const PayrollIndex = ({
                   % of total
                 </p>
               </div>
-              <div className="p-2 rounded-full bg-green-50 text-green-500 dark:bg-green-900/20 dark:text-green-400 group-hover:bg-green-100 dark:group-hover:bg-green-800/30 transition-colors">
+              <div className="p-2 rounded-full bg-gray-100 text-black dark:bg-gray-900 dark:text-white group-hover:bg-gray-200 dark:group-hover:bg-gray-800 transition-colors">
                 <Calendar className="h-5 w-5" />
               </div>
             </div>
@@ -1155,7 +1319,7 @@ const PayrollIndex = ({
                   % of total
                 </p>
               </div>
-              <div className="p-2 rounded-full bg-amber-50 text-amber-500 dark:bg-amber-900/20 dark:text-amber-400 group-hover:bg-amber-100 dark:group-hover:bg-amber-800/30 transition-colors">
+              <div className="p-2 rounded-full bg-gray-100 text-black dark:bg-gray-900 dark:text-white group-hover:bg-gray-200 dark:group-hover:bg-gray-800 transition-colors">
                 <AlertCircle className="h-5 w-5" />
               </div>
             </div>
@@ -1176,16 +1340,17 @@ const PayrollIndex = ({
           className="mb-6"
           value={activeTab}
           onValueChange={(value) => {
-            setActiveTab(value as "entries" | "periods")
+            setActiveTab(value as "entries" | "periods" | "kanban")
           }}
         >
           <TabsList className="mb-4">
             <TabsTrigger value="entries">Payroll Entries</TabsTrigger>
             <TabsTrigger value="periods">Payroll Periods</TabsTrigger>
+            <TabsTrigger value="kanban">Kanban Board</TabsTrigger>
           </TabsList>
 
           {/* Search & Filter Section - Conditionally rendered based on active tab */}
-          {activeTab === "entries" && (
+          {(activeTab === "entries" || activeTab === "kanban") && (
             <Card className="p-4 mb-6 border border-slate-200 dark:border-slate-700 shadow-sm">
               <div className="mb-4 flex flex-col md:flex-row gap-2 items-center">
                 <div className="relative flex-1">
@@ -1348,6 +1513,8 @@ const PayrollIndex = ({
                           <tr
                             key={payroll.id}
                             className="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/50"
+                            draggable
+                            onDragStart={(e) => handleDragStart(e, payroll)}
                           >
                             <td className="py-3 px-2 font-medium">#{payroll.id}</td>
                             <td className="py-3 px-2">{payroll.employee_number}</td>
@@ -1356,32 +1523,40 @@ const PayrollIndex = ({
                             <td className="py-3 px-2">{payroll.week_id}</td>
                             <td className="py-3 px-2">
                               {getPayrollPeriodName(payroll.week_id)
-                                .replace(/^[0-9]+ $$/, "")
-                                .replace(/$$$/, "")}
+                                .replace(/^[0-9]+ \(/, "")
+                                .replace(/\)$/, "")}
                             </td>
                             <td className="py-3 px-2">{formatCurrency(payroll.gross_pay)}</td>
                             <td className="py-3 px-2">{formatCurrency(payroll.total_deductions)}</td>
                             <td className="py-3 px-2">{formatCurrency(payroll.net_pay)}</td>
                             <td className="py-3 px-2">
-                              <Badge className={getStatusBadgeColor(payroll.status)}>{payroll.status}</Badge>
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Badge className={`${getStatusBadgeColor(payroll.status)} cursor-pointer`}>
+                                    {payroll.status}
+                                  </Badge>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent>
+                                  {statusColumns.map((column) => (
+                                    <DropdownMenuItem
+                                      key={column.id}
+                                      onClick={() => handleStatusChange(payroll, column.id)}
+                                      className={
+                                        payroll.status.toLowerCase() === column.id
+                                          ? "bg-slate-100 dark:bg-slate-800"
+                                          : ""
+                                      }
+                                    >
+                                      <div className="flex items-center">
+                                        {column.icon}
+                                        <span className="ml-2">{column.title}</span>
+                                      </div>
+                                    </DropdownMenuItem>
+                                  ))}
+                                </DropdownMenuContent>
+                              </DropdownMenu>
                             </td>
                             <td className="py-3 px-2 flex space-x-1">
-                              <TooltipProvider>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      className="h-7 px-2 border-slate-200 text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:text-slate-400 dark:hover:border-slate-600"
-                                      onClick={() => openUpdateModal(payroll)}
-                                    >
-                                      Edit
-                                    </Button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>Edit Payroll</TooltipContent>
-                                </Tooltip>
-                              </TooltipProvider>
-
                               <TooltipProvider>
                                 <Tooltip>
                                   <TooltipTrigger asChild>
@@ -1393,15 +1568,6 @@ const PayrollIndex = ({
                                         onClick={() => printPayroll(payroll)}
                                       >
                                         <Printer className="h-3.5 w-3.5" />
-                                      </Button>
-                                      <Button
-                                        variant="outline"
-                                        size="icon"
-                                        className="absolute -right-3 -bottom-3 h-5 w-5 rounded-full border-blue-200 text-blue-600 hover:border-blue-300 dark:border-blue-800 dark:text-blue-400 dark:hover:border-blue-700"
-                                        onClick={() => printPayroll(payroll, true)}
-                                        title="Regenerate Payslip"
-                                      >
-                                        <RefreshCw className="h-2.5 w-2.5" />
                                       </Button>
                                     </div>
                                   </TooltipTrigger>
@@ -1535,7 +1701,84 @@ const PayrollIndex = ({
               onTabChange={setActiveTab}
             />
           </TabsContent>
+
+          <TabsContent value="kanban" className="mt-0">
+            {isLoading ? (
+              <div className="flex justify-center items-center h-64">
+                <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-indigo-500"></div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+                {statusColumns.map((column) => (
+                  <div
+                    key={column.id}
+                    className="flex flex-col h-full"
+                    onDragOver={(e) => handleDragOver(e, column.id)}
+                    onDrop={(e) => handleDrop(e, column.id)}
+                  >
+                    <div className="bg-gray-100 dark:bg-gray-900 p-3 rounded-t-lg flex items-center justify-between">
+                      <div className="flex items-center">
+                        {column.icon}
+                        <h3 className="font-medium ml-2">{column.title}</h3>
+                      </div>
+                      <Badge className="bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-300">
+                        {payrollsByStatus[column.id]?.length || 0}
+                      </Badge>
+                    </div>
+                    <div className="bg-white dark:bg-black p-2 rounded-b-lg flex-1 min-h-[300px] overflow-y-auto">
+                      {payrollsByStatus[column.id]?.length > 0 ? (
+                        payrollsByStatus[column.id].map((payroll) => (
+                          <div
+                            key={payroll.id}
+                            className="bg-white dark:bg-black p-3 rounded-lg mb-2 shadow-sm border border-gray-200 dark:border-gray-800 cursor-move"
+                            draggable
+                            onDragStart={(e) => handleDragStart(e, payroll)}
+                          >
+                            <div className="flex justify-between items-start mb-2">
+                              <span className="font-medium">{payroll.full_name}</span>
+                              <Badge className={getStatusBadgeColor(payroll.status)}>{payroll.status}</Badge>
+                            </div>
+                            <div className="text-xs text-slate-500 dark:text-slate-400 mb-2">
+                              ID: #{payroll.id} | Emp #: {payroll.employee_number}
+                            </div>
+                            <div className="flex justify-between text-sm">
+                              <span>Gross: {formatCurrency(payroll.gross_pay)}</span>
+                              <span>Net: {formatCurrency(payroll.net_pay)}</span>
+                            </div>
+                            <div className="flex mt-2 space-x-1">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 w-7 p-0 border-blue-200 text-blue-600 hover:border-blue-300 dark:border-blue-800 dark:text-blue-400 dark:hover:border-blue-700"
+                                onClick={() => printPayroll(payroll)}
+                              >
+                                <Printer className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 w-7 p-0 border-green-200 text-green-600 hover:border-green-300 dark:border-green-800 dark:text-green-400 dark:hover:border-green-700"
+                                onClick={() => sendEmail(payroll)}
+                              >
+                                <Mail className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="flex items-center justify-center h-full text-slate-400 dark:text-slate-600 text-sm">
+                          No payrolls in this status
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </TabsContent>
         </Tabs>
+
+        {/* Status Change Confirmation Modal */}
 
         {/* Modals */}
         {isAddModalOpen && (

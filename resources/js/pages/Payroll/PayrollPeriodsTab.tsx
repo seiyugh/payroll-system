@@ -238,16 +238,36 @@ const PayrollPeriodsTab = ({ periods = [], onPeriodSelect, onTabChange }: Payrol
     setIsLoading(true)
     console.log("Starting payroll generation for week ID:", weekId)
 
-    // Add debug logging
-    console.log("Sending request to /payroll/generate with data:", { week_id: weekId })
-
     router.post(
       "/payroll/generate",
-      { week_id: weekId },
+      {
+        week_id: weekId,
+        validate_attendance: true, // This flag enables attendance validation
+        attendance_rules: {
+          // Add the attendance calculation rules
+          Present: 1.0, // Daily rate * 1
+          Absent: 0.0, // Daily rate * 0
+          "Day Off": 0.0, // Daily rate * 0
+          "Half Day": 0.5, // Daily rate / 2
+          Holiday: 2.0, // Daily rate * 2
+          Leave: 0.0, // Daily rate * 0
+          WFH: 1.0, // Daily rate * 1
+          SP: 1.0, // Daily rate * 1
+        },
+      },
       {
         onSuccess: (page) => {
           console.log("Payroll generation successful:", page)
-          toast.success("Payroll generated successfully for this period!")
+
+          // Check if we have a message about skipped employees
+          if (page.props.skipped_employees && page.props.skipped_employees.length > 0) {
+            toast.warning(
+              `Payroll generated with exceptions: ${page.props.skipped_employees.length} employees skipped due to missing attendance records.`,
+            )
+          } else {
+            toast.success("Payroll generated successfully for this period!")
+          }
+
           setIsLoading(false)
 
           // Redirect to the payroll entries tab to show the generated entries
@@ -387,7 +407,10 @@ const PayrollPeriodsTab = ({ periods = [], onPeriodSelect, onTabChange }: Payrol
               <TooltipContent>Refresh Data</TooltipContent>
             </Tooltip>
           </TooltipProvider>
-          <Button onClick={() => setIsNewPeriodModalOpen(true)} className="bg-indigo-600 text-white hover:bg-indigo-800 text:white dark:text-black">
+          <Button
+            onClick={() => setIsNewPeriodModalOpen(true)}
+            className="bg-indigo-600 text-white hover:bg-indigo-800 text:white dark:text-black"
+          >
             <Plus className="h-4 w-4 mr-2" />
             New Period
           </Button>
@@ -771,3 +794,4 @@ const PayrollPeriodsTab = ({ periods = [], onPeriodSelect, onTabChange }: Payrol
 }
 
 export default PayrollPeriodsTab
+

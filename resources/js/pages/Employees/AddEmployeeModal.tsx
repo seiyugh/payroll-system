@@ -11,7 +11,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { X, User, Briefcase, FileText, Phone } from "lucide-react"
 
-const AddEmployeeModal = ({ onClose }) => {
+const AddEmployeeModal = ({ onClose, onSubmit }) => {
   const [activeTab, setActiveTab] = useState("personal")
 
   const { data, setData, post, errors, processing } = useForm({
@@ -22,19 +22,19 @@ const AddEmployeeModal = ({ onClose }) => {
     middle_name: "",
     address: "",
     position: "admin",
-    department: "",
+    department: "Administration",
     assigned_area: "",
     date_hired: "",
     years_of_service: "",
     employment_status: "Probationary",
     date_of_regularization: "",
     status_201: "incomplete",
-    resignation_termination_date: "",
+    date_terminated_resigned: "",
     daily_rate: 1,
     civil_status: "Single",
     gender: "Male",
     birthdate: "",
-    birthplace: "",
+    birth_place: "",
     age: "",
     contacts: "",
     id_status: "incomplete",
@@ -44,6 +44,24 @@ const AddEmployeeModal = ({ onClose }) => {
     pagibig_no: "",
     emergency_contact_name: "",
     emergency_contact_mobile: "",
+    // New fields
+    id_no: "",
+    ub_account: "",
+    resume: false,
+    government_id: false,
+    type_of_id: null,
+    clearance: null,
+    id_number: "",
+    staff_house: false,
+    birth_certificate: false,
+    marriage_certificate: false,
+    tor: false,
+    diploma_hs_college: false,
+    contract: "NOT YET",
+    performance_evaluation: false,
+    medical_cert: false,
+    remarks: "",
+    email: "",
   })
 
   const handleChange = (e) => {
@@ -75,53 +93,90 @@ const AddEmployeeModal = ({ onClose }) => {
     updateData(name, value)
   }
 
+  const handleCheckboxChange = (e) => {
+    const { name, checked } = e.target
+    setData((prev) => ({
+      ...prev,
+      [name]: checked,
+    }))
+  }
+
   const handleSubmit = (e) => {
     e.preventDefault()
 
-    post(route("employees.store"), {
-      onSuccess: () => {
-        toast.success("Employee added successfully!")
-        onClose()
-      },
-      onError: (errors) => {
-        // Find the first tab with errors and switch to it
-        const tabsWithErrors = {
-          personal: [
-            "first_name",
-            "middle_name",
-            "last_name",
-            "civil_status",
-            "gender",
-            "birthdate",
-            "birthplace",
-            "age",
-            "address",
-          ],
-          employment: [
-            "employee_number",
-            "position",
-            "department",
-            "assigned_area",
-            "date_hired",
-            "employment_status",
-            "date_of_regularization",
-            "years_of_service",
-            "daily_rate",
-          ],
-          government: ["sss_no", "tin_no", "philhealth_no", "pagibig_no", "status_201", "id_status"],
-          emergency: ["contacts", "emergency_contact_name", "emergency_contact_mobile"],
-        }
+    // Add birthplace field for backend mapping
+    const submissionData = {
+      ...data,
+      birthplace: data.birth_place,
+      resignation_termination_date: data.date_terminated_resigned,
+    }
 
-        for (const [tab, fields] of Object.entries(tabsWithErrors)) {
-          if (fields.some((field) => errors[field])) {
-            setActiveTab(tab)
-            break
+    if (onSubmit) {
+      onSubmit(submissionData)
+    } else {
+      post(window.route("employees.store"), {
+        onSuccess: () => {
+          toast.success("Employee added successfully!")
+          onClose()
+        },
+        onError: (errors) => {
+          // Find the first tab with errors and switch to it
+          const tabsWithErrors = {
+            personal: [
+              "first_name",
+              "middle_name",
+              "last_name",
+              "civil_status",
+              "gender",
+              "birthdate",
+              "birth_place",
+              "age",
+              "address",
+            ],
+            employment: [
+              "employee_number",
+              "position",
+              "department",
+              "assigned_area",
+              "date_hired",
+              "employment_status",
+              "date_of_regularization",
+              "years_of_service",
+              "daily_rate",
+            ],
+            government: ["sss_no", "tin_no", "philhealth_no", "pagibig_no", "status_201", "id_status"],
+            emergency: ["contacts", "emergency_contact_name", "emergency_contact_mobile"],
+            documents: [
+              "id_no",
+              "ub_account",
+              "resume",
+              "type_of_id",
+              "id_number",
+              "clearance",
+              "contract",
+              "government_id",
+              "staff_house",
+              "birth_certificate",
+              "marriage_certificate",
+              "tor",
+              "diploma_hs_college",
+              "performance_evaluation",
+              "medical_cert",
+              "remarks",
+            ],
           }
-        }
 
-        toast.error("Please correct the errors in the form")
-      },
-    })
+          for (const [tab, fields] of Object.entries(tabsWithErrors)) {
+            if (fields.some((field) => errors[field])) {
+              setActiveTab(tab)
+              break
+            }
+          }
+
+          toast.error("Please correct the errors in the form")
+        },
+      })
+    }
   }
 
   return (
@@ -165,6 +220,13 @@ const AddEmployeeModal = ({ onClose }) => {
                 >
                   <Phone className="mr-2 h-4 w-4" />
                   Emergency
+                </TabsTrigger>
+                <TabsTrigger
+                  value="documents"
+                  className="data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none"
+                >
+                  <FileText className="mr-2 h-4 w-4" />
+                  Documents
                 </TabsTrigger>
               </TabsList>
             </div>
@@ -248,10 +310,10 @@ const AddEmployeeModal = ({ onClose }) => {
                       />
                       <FormField
                         label="Birthplace"
-                        name="birthplace"
-                        value={data.birthplace}
+                        name="birth_place"
+                        value={data.birth_place}
                         onChange={handleChange}
-                        error={errors.birthplace}
+                        error={errors.birth_place}
                       />
                       <FormField
                         type="number"
@@ -260,6 +322,14 @@ const AddEmployeeModal = ({ onClose }) => {
                         value={data.age}
                         onChange={handleChange}
                         error={errors.age}
+                      />
+                      <FormField
+                        label="Email"
+                        name="email"
+                        type="email"
+                        value={data.email}
+                        onChange={handleChange}
+                        error={errors.email}
                       />
                     </div>
                   </CardContent>
@@ -289,15 +359,25 @@ const AddEmployeeModal = ({ onClose }) => {
                           { value: "hr", label: "HR" },
                           { value: "billing", label: "Billing" },
                           { value: "technician", label: "Technician" },
-                          { value: "driver/technician", label: "Driver/Technician" },
+                          { value: "driver technician", label: "Driver Technician" },
                         ]}
+                        required
                       />
-                      <FormField
+                      <FormSelect
                         label="Department"
                         name="department"
                         value={data.department}
-                        onChange={handleChange}
+                        onChange={(value) => handleSelectChange("department", value)}
                         error={errors.department}
+                        options={[
+                          { value: "Administration", label: "Administration" },
+                          { value: "Human Resources", label: "Human Resources" },
+                          { value: "Finance", label: "Finance" },
+                          { value: "Operations", label: "Operations" },
+                          { value: "Allen One", label: "Allen One" },
+                          { value: "Technical", label: "Technical" },
+                        ]}
+                        required
                       />
                       <FormField
                         label="Assigned Area"
@@ -324,8 +404,7 @@ const AddEmployeeModal = ({ onClose }) => {
                         options={[
                           { value: "Probationary", label: "Probationary" },
                           { value: "Regular", label: "Regular" },
-                          { value: "Resigned", label: "Resigned" },
-                          { value: "Terminated", label: "Terminated" },
+                          { value: "Project-Based", label: "Project-Based" },
                         ]}
                       />
                       <FormField
@@ -352,6 +431,14 @@ const AddEmployeeModal = ({ onClose }) => {
                         onChange={handleChange}
                         error={errors.daily_rate}
                         required
+                      />
+                      <FormField
+                        type="date"
+                        label="Termination/Resignation Date"
+                        name="date_terminated_resigned"
+                        value={data.date_terminated_resigned}
+                        onChange={handleChange}
+                        error={errors.date_terminated_resigned}
                       />
                       <FormSelect
                         label="201 File Status"
@@ -422,12 +509,12 @@ const AddEmployeeModal = ({ onClose }) => {
                   <CardContent className="p-0">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <FormField
-                        type="tel"
                         label="Contact Number"
                         name="contacts"
                         value={data.contacts}
                         onChange={handleChange}
                         error={errors.contacts}
+                        required
                       />
                       <div className="md:col-span-2">
                         <div className="bg-muted/50 p-4 rounded-lg mb-4">
@@ -443,6 +530,7 @@ const AddEmployeeModal = ({ onClose }) => {
                         value={data.emergency_contact_name}
                         onChange={handleChange}
                         error={errors.emergency_contact_name}
+                        required
                       />
                       <FormField
                         label="Emergency Contact Mobile"
@@ -450,7 +538,151 @@ const AddEmployeeModal = ({ onClose }) => {
                         value={data.emergency_contact_mobile}
                         onChange={handleChange}
                         error={errors.emergency_contact_mobile}
+                        required
                       />
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              <TabsContent value="documents" className="mt-0">
+                <Card className="border-0 shadow-none">
+                  <CardContent className="p-0">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <FormField
+                        label="ID Number"
+                        name="id_no"
+                        value={data.id_no}
+                        onChange={handleChange}
+                        error={errors.id_no}
+                      />
+                      <FormField
+                        label="UB Account"
+                        name="ub_account"
+                        value={data.ub_account}
+                        onChange={handleChange}
+                        error={errors.ub_account}
+                      />
+                      <FormSelect
+                        label="Type of ID"
+                        name="type_of_id"
+                        value={data.type_of_id}
+                        onChange={(value) => handleSelectChange("type_of_id", value)}
+                        error={errors.type_of_id}
+                        options={[
+                          { value: "PhilID", label: "PhilID" },
+                          { value: "DL", label: "Driver's License" },
+                          { value: "Phi-health", label: "PhilHealth" },
+                          { value: "SSS", label: "SSS" },
+                          { value: "UMID", label: "UMID" },
+                          { value: "POSTAL", label: "Postal ID" },
+                          { value: "Passport", label: "Passport" },
+                          { value: "Voters", label: "Voter's ID" },
+                          { value: "TIN", label: "TIN ID" },
+                          { value: "D1", label: "D1" },
+                        ]}
+                      />
+                      <FormField
+                        label="ID Number"
+                        name="id_number"
+                        value={data.id_number}
+                        onChange={handleChange}
+                        error={errors.id_number}
+                      />
+                      <FormSelect
+                        label="Clearance"
+                        name="clearance"
+                        value={data.clearance}
+                        onChange={(value) => handleSelectChange("clearance", value)}
+                        error={errors.clearance}
+                        options={[
+                          { value: "BARANGAY Clearance", label: "Barangay Clearance" },
+                          { value: "NBI Clearance", label: "NBI Clearance" },
+                          { value: "Police Clearance", label: "Police Clearance" },
+                        ]}
+                      />
+                      <FormSelect
+                        label="Contract Status"
+                        name="contract"
+                        value={data.contract}
+                        onChange={(value) => handleSelectChange("contract", value)}
+                        error={errors.contract}
+                        options={[
+                          { value: "SIGNED", label: "Signed" },
+                          { value: "NOT YET", label: "Not Yet" },
+                          { value: "REVIEW", label: "Under Review" },
+                        ]}
+                      />
+                      <div className="md:col-span-2">
+                        <Label className="mb-2 block">Document Checklist</Label>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 border rounded-md">
+                          <FormCheckbox
+                            label="Government ID"
+                            name="government_id"
+                            checked={data.government_id}
+                            onChange={(e) => handleCheckboxChange(e)}
+                          />
+                          <FormCheckbox
+                            label="Staff House"
+                            name="staff_house"
+                            checked={data.staff_house}
+                            onChange={(e) => handleCheckboxChange(e)}
+                          />
+                          <FormCheckbox
+                            label="Birth Certificate"
+                            name="birth_certificate"
+                            checked={data.birth_certificate}
+                            onChange={(e) => handleCheckboxChange(e)}
+                          />
+                          <FormCheckbox
+                            label="Marriage Certificate"
+                            name="marriage_certificate"
+                            checked={data.marriage_certificate}
+                            onChange={(e) => handleCheckboxChange(e)}
+                          />
+                          <FormCheckbox
+                            label="Transcript of Records"
+                            name="tor"
+                            checked={data.tor}
+                            onChange={(e) => handleCheckboxChange(e)}
+                          />
+                          <FormCheckbox
+                            label="Diploma (HS/College)"
+                            name="diploma_hs_college"
+                            checked={data.diploma_hs_college}
+                            onChange={(e) => handleCheckboxChange(e)}
+                          />
+                          <FormCheckbox
+                            label="Performance Evaluation"
+                            name="performance_evaluation"
+                            checked={data.performance_evaluation}
+                            onChange={(e) => handleCheckboxChange(e)}
+                          />
+                          <FormCheckbox
+                            label="Medical Certificate"
+                            name="medical_cert"
+                            checked={data.medical_cert}
+                            onChange={(e) => handleCheckboxChange(e)}
+                          />
+                          <FormCheckbox
+                            label="Resume"
+                            name="resume"
+                            checked={data.resume}
+                            onChange={(e) => handleCheckboxChange(e)}
+                          />
+                        </div>
+                      </div>
+                      <div className="md:col-span-2">
+                        <Label htmlFor="remarks">Remarks</Label>
+                        <textarea
+                          id="remarks"
+                          name="remarks"
+                          value={data.remarks}
+                          onChange={handleChange}
+                          className={`w-full p-2 border rounded min-h-[100px] ${errors.remarks ? "border-destructive" : "border-input"}`}
+                        />
+                        {errors.remarks && <p className="text-destructive text-xs">{errors.remarks}</p>}
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
@@ -472,7 +704,7 @@ const AddEmployeeModal = ({ onClose }) => {
   )
 }
 
-const FormField = ({ label, type = "text", name, value, onChange, error, disabled, required, className = "" }) => (
+const FormField = ({ label, type, name, value, onChange, error, disabled, required, className = "" }) => (
   <div className={className}>
     <div className="space-y-2">
       <Label htmlFor={name} className="flex items-center">
@@ -514,6 +746,22 @@ const FormSelect = ({ label, name, value, onChange, error, options, required }) 
       </Select>
       {error && <p className="text-destructive text-xs">{error}</p>}
     </div>
+  </div>
+)
+
+const FormCheckbox = ({ label, name, checked, onChange }) => (
+  <div className="flex items-center space-x-2">
+    <input
+      type="checkbox"
+      id={name}
+      name={name}
+      checked={checked}
+      onChange={onChange}
+      className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+    />
+    <Label htmlFor={name} className="text-sm font-medium text-gray-700">
+      {label}
+    </Label>
   </div>
 )
 
