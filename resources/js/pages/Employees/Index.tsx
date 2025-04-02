@@ -27,7 +27,9 @@ import {
   Clock,
   CalendarDays,
   ListFilter,
-  Eye, Pencil, Trash2 
+  Eye,
+  Pencil,
+  Trash2,
 } from "lucide-react"
 import { toast } from "sonner"
 import AddEmployeeModal from "./AddEmployeeModal"
@@ -108,6 +110,38 @@ interface PaginationData {
   }[]
 }
 
+interface DocumentCompletionStats {
+  contractSigned: number
+  contractSignedPercent: number
+  medicalComplete: number
+  medicalCompletePercent: number
+  governmentIdComplete: number
+  governmentIdCompletePercent: number
+  allDocsComplete: number
+  allDocsCompletePercent: number
+}
+
+interface YearsOfServiceStats {
+  lessThanOneYear: number
+  oneToTwoYears: number
+  threeToFiveYears: number
+  moreThanFiveYears: number
+}
+
+interface DepartmentDistribution {
+  [department: string]: {
+    count: number
+    percentage: number
+  }
+}
+
+interface PositionDistribution {
+  [position: string]: {
+    count: number
+    percentage: number
+  }
+}
+
 interface EmployeesIndexProps {
   employees: {
     data: Employee[]
@@ -130,6 +164,10 @@ interface EmployeesIndexProps {
     averageAge: number
     averageYearsOfService: number
     totalDailyRate: number
+    documentCompletion?: DocumentCompletionStats
+    yearsOfService?: YearsOfServiceStats
+    departmentDistribution?: DepartmentDistribution
+    positionDistribution?: PositionDistribution
   }
   departments?: string[]
   positions?: string[]
@@ -577,22 +615,28 @@ const EmployeesIndex = ({
   const calculateOnboardingCompletion = () => {
     if (stats.totalEmployees === 0) return 0
 
-    // Use the total stats from the backend instead of just the current page
-    // This is an estimate based on the current page data ratio
-    const currentPageRatio = employeeData.length > 0 ? stats.totalEmployees / employeeData.length : 1
-    const completedCount = Math.round(
-      employeeData.filter((emp) => emp.sss_no && emp.tin_no && emp.philhealth_no && emp.pagibig_no).length *
-        currentPageRatio,
-    )
+    // Use the backend-provided stats if available
+    if (stats.documentCompletion) {
+      return stats.documentCompletion.allDocsCompletePercent
+    }
 
-    // Calculate based on the total employees, not just the current page
-    return Math.round((completedCount / stats.totalEmployees) * 100)
+    // Fallback to calculating from current page data
+    const completedCount = employeeData.filter(
+      (emp) => emp.sss_no && emp.tin_no && emp.philhealth_no && emp.pagibig_no,
+    ).length
+    return Math.round((completedCount / employeeData.length) * 100)
   }
 
-  // Calculate document completion stats
-  const calculateDocumentStats = () => {
-    const totalEmployees = stats.totalEmployees || 0
-    if (totalEmployees === 0)
+  // Get document completion stats from backend or calculate from current page
+  const getDocumentStats = () => {
+    // Use the backend-provided stats if available
+    if (stats.documentCompletion) {
+      return stats.documentCompletion
+    }
+
+    // Fallback to calculating from current page data
+    const totalEmployees = employeeData.length
+    if (totalEmployees === 0) {
       return {
         contractSigned: 0,
         contractSignedPercent: 0,
@@ -603,27 +647,22 @@ const EmployeesIndex = ({
         allDocsComplete: 0,
         allDocsCompletePercent: 0,
       }
+    }
 
-    // Use the backend stats instead of just the current page data
-    // These are estimates based on the current page data ratio applied to total
-    const currentPageRatio = employeeData.length > 0 ? totalEmployees / employeeData.length : 1
-
-    const contractSigned = Math.round(employeeData.filter((e) => e.contract === "SIGNED").length * currentPageRatio)
-    const medicalComplete = Math.round(employeeData.filter((e) => e.medical_cert).length * currentPageRatio)
-    const governmentIdComplete = Math.round(employeeData.filter((e) => e.government_id).length * currentPageRatio)
-    const allDocsComplete = Math.round(
-      employeeData.filter(
-        (e) =>
-          e.contract === "SIGNED" &&
-          e.medical_cert &&
-          e.government_id &&
-          e.birth_certificate &&
-          e.sss_no &&
-          e.tin_no &&
-          e.philhealth_no &&
-          e.pagibig_no,
-      ).length * currentPageRatio,
-    )
+    const contractSigned = employeeData.filter((e) => e.contract === "SIGNED").length
+    const medicalComplete = employeeData.filter((e) => e.medical_cert).length
+    const governmentIdComplete = employeeData.filter((e) => e.government_id).length
+    const allDocsComplete = employeeData.filter(
+      (e) =>
+        e.contract === "SIGNED" &&
+        e.medical_cert &&
+        e.government_id &&
+        e.birth_certificate &&
+        e.sss_no &&
+        e.tin_no &&
+        e.philhealth_no &&
+        e.pagibig_no,
+    ).length
 
     return {
       contractSigned,
@@ -639,11 +678,26 @@ const EmployeesIndex = ({
 
   // Calculate gender distribution
   const calculateGenderDistribution = () => {
-    const totalEmployees = stats.totalEmployees || 0
+    // Use the backend stats if available
+    if (stats.maleCount !== undefined && stats.femaleCount !== undefined) {
+      const totalEmployees = stats.totalEmployees || 0
+      const maleCount = stats.maleCount || 0
+      const femaleCount = stats.femaleCount || 0
+
+      return {
+        male: maleCount,
+        female: femaleCount,
+        malePercentage: totalEmployees > 0 ? Math.round((maleCount / totalEmployees) * 100) : 0,
+        femalePercentage: totalEmployees > 0 ? Math.round((femaleCount / totalEmployees) * 100) : 0,
+      }
+    }
+
+    // Fallback to calculating from current page data
+    const totalEmployees = employeeData.length
     if (totalEmployees === 0) return { male: 0, female: 0, malePercentage: 0, femalePercentage: 0 }
 
-    const maleCount = stats.maleCount || 0
-    const femaleCount = stats.femaleCount || 0
+    const maleCount = employeeData.filter((emp) => emp.gender === "Male").length
+    const femaleCount = employeeData.filter((emp) => emp.gender === "Female").length
 
     return {
       male: maleCount,
@@ -651,6 +705,78 @@ const EmployeesIndex = ({
       malePercentage: Math.round((maleCount / totalEmployees) * 100),
       femalePercentage: Math.round((femaleCount / totalEmployees) * 100),
     }
+  }
+
+  // Get years of service stats
+  const getYearsOfServiceStats = () => {
+    // Use the backend-provided stats if available
+    if (stats.yearsOfService) {
+      return stats.yearsOfService
+    }
+
+    // Fallback to calculating from current page data
+    return {
+      lessThanOneYear: employeeData.filter((e) => e.years_of_service < 1).length,
+      oneToTwoYears: employeeData.filter((e) => e.years_of_service >= 1 && e.years_of_service < 3).length,
+      threeToFiveYears: employeeData.filter((e) => e.years_of_service >= 3 && e.years_of_service <= 5).length,
+      moreThanFiveYears: employeeData.filter((e) => e.years_of_service > 5).length,
+    }
+  }
+
+  // Get department distribution
+  const getDepartmentDistribution = () => {
+    // Use the backend-provided stats if available
+    if (stats.departmentDistribution) {
+      return Object.entries(stats.departmentDistribution).map(([department, data]) => ({
+        department,
+        count: data.count,
+        percentage: data.percentage,
+      }))
+    }
+
+    // Fallback to calculating from current page data
+    const distribution: Record<string, number> = {}
+    employeeData.forEach((emp) => {
+      if (distribution[emp.department]) {
+        distribution[emp.department]++
+      } else {
+        distribution[emp.department] = 1
+      }
+    })
+
+    return Object.entries(distribution).map(([department, count]) => ({
+      department,
+      count,
+      percentage: Math.round((count / employeeData.length) * 100),
+    }))
+  }
+
+  // Get position distribution
+  const getPositionDistribution = () => {
+    // Use the backend-provided stats if available
+    if (stats.positionDistribution) {
+      return Object.entries(stats.positionDistribution).map(([position, data]) => ({
+        position,
+        count: data.count,
+        percentage: data.percentage,
+      }))
+    }
+
+    // Fallback to calculating from current page data
+    const distribution: Record<string, number> = {}
+    employeeData.forEach((emp) => {
+      if (distribution[emp.position]) {
+        distribution[emp.position]++
+      } else {
+        distribution[emp.position] = 1
+      }
+    })
+
+    return Object.entries(distribution).map(([position, count]) => ({
+      position,
+      count,
+      percentage: Math.round((count / employeeData.length) * 100),
+    }))
   }
 
   // Get total employees count from stats
@@ -662,7 +788,10 @@ const EmployeesIndex = ({
   const probationaryPercentage = totalEmployees > 0 ? Math.round((probationaryEmployees / totalEmployees) * 100) : 0
   const genderDistribution = calculateGenderDistribution()
   const onboardingCompletion = calculateOnboardingCompletion()
-  const documentStats = calculateDocumentStats()
+  const documentStats = getDocumentStats()
+  const yearsOfServiceStats = getYearsOfServiceStats()
+  const departmentDistribution = getDepartmentDistribution()
+  const positionDistribution = getPositionDistribution()
 
   // Filter employees by date for daily view
   const dailyEmployees = useMemo(() => {
@@ -679,44 +808,6 @@ const EmployeesIndex = ({
       return empDate >= periodStart && empDate <= periodEnd
     })
   }, [employeeData, periodStart, periodEnd])
-
-  // Department distribution for analytics
-  const departmentDistribution = useMemo(() => {
-    const distribution: Record<string, number> = {}
-
-    employeeData.forEach((emp) => {
-      if (distribution[emp.department]) {
-        distribution[emp.department]++
-      } else {
-        distribution[emp.department] = 1
-      }
-    })
-
-    return Object.entries(distribution).map(([department, count]) => ({
-      department,
-      count,
-      percentage: Math.round((count / employeeData.length) * 100),
-    }))
-  }, [employeeData])
-
-  // Position distribution for analytics
-  const positionDistribution = useMemo(() => {
-    const distribution: Record<string, number> = {}
-
-    employeeData.forEach((emp) => {
-      if (distribution[emp.position]) {
-        distribution[emp.position]++
-      } else {
-        distribution[emp.position] = 1
-      }
-    })
-
-    return Object.entries(distribution).map(([position, count]) => ({
-      position,
-      count,
-      percentage: Math.round((count / employeeData.length) * 100),
-    }))
-  }, [employeeData])
 
   return (
     <AppLayout
@@ -1081,39 +1172,39 @@ const EmployeesIndex = ({
                                 </Badge>
                               </td>
                               <td className="py-3 px-4">
-  <div className="flex items-center gap-2">
-    <Button
-      variant="outline"
-      size="sm"
-      className="h-8 border-slate-200 text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:text-slate-400 dark:hover:border-slate-600"
-      onClick={() => openViewModal(employee)}
-    >
-      <Eye className="h-4 w-4 mr-1" />
-      View
-    </Button>
-    <Button
-      variant="outline"
-      size="sm"
-      className="h-8 border-slate-200 text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:text-slate-400 dark:hover:border-slate-600"
-      onClick={() => openUpdateModal(employee)}
-    >
-      <Pencil className="h-4 w-4 mr-1" />
-      Edit
-    </Button>
-    <Button
-      variant="outline"
-      size="sm"
-      className="h-8 border-red-200 text-red-600 hover:border-red-300 dark:border-red-800 dark:text-red-400 dark:hover:border-red-700"
-      onClick={() => {
-        setSelectedEmployee(employee)
-        setIsDeleteModalOpen(true)
-      }}
-    >
-      <Trash2 className="h-4 w-4 mr-1" />
-      Delete
-    </Button>
-  </div>
-</td>
+                                <div className="flex items-center gap-2">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-8 border-slate-200 text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:text-slate-400 dark:hover:border-slate-600"
+                                    onClick={() => openViewModal(employee)}
+                                  >
+                                    <Eye className="h-4 w-4 mr-1" />
+                                    View
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-8 border-slate-200 text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:text-slate-400 dark:hover:border-slate-600"
+                                    onClick={() => openUpdateModal(employee)}
+                                  >
+                                    <Pencil className="h-4 w-4 mr-1" />
+                                    Edit
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-8 border-red-200 text-red-600 hover:border-red-300 dark:border-red-800 dark:text-red-400 dark:hover:border-red-700"
+                                    onClick={() => {
+                                      setSelectedEmployee(employee)
+                                      setIsDeleteModalOpen(true)
+                                    }}
+                                  >
+                                    <Trash2 className="h-4 w-4 mr-1" />
+                                    Delete
+                                  </Button>
+                                </div>
+                              </td>
                             </tr>
                           ))
                         ) : (
@@ -1586,23 +1677,19 @@ const EmployeesIndex = ({
                       <div className="grid grid-cols-4 gap-2 text-center">
                         <div className="bg-white dark:bg-slate-800 p-2 rounded border border-slate-200 dark:border-slate-700">
                           <p className="text-xs text-slate-500">{"<"} 1 year</p>
-                          <p className="font-medium">{employeeData.filter((e) => e.years_of_service < 1).length}</p>
+                          <p className="font-medium">{yearsOfServiceStats.lessThanOneYear}</p>
                         </div>
                         <div className="bg-white dark:bg-slate-800 p-2 rounded border border-slate-200 dark:border-slate-700">
                           <p className="text-xs text-slate-500">1-2 years</p>
-                          <p className="font-medium">
-                            {employeeData.filter((e) => e.years_of_service >= 1 && e.years_of_service < 3).length}
-                          </p>
+                          <p className="font-medium">{yearsOfServiceStats.oneToTwoYears}</p>
                         </div>
                         <div className="bg-white dark:bg-slate-800 p-2 rounded border border-slate-200 dark:border-slate-700">
                           <p className="text-xs text-slate-500">3-5 years</p>
-                          <p className="font-medium">
-                            {employeeData.filter((e) => e.years_of_service >= 3 && e.years_of_service <= 5).length}
-                          </p>
+                          <p className="font-medium">{yearsOfServiceStats.threeToFiveYears}</p>
                         </div>
                         <div className="bg-white dark:bg-slate-800 p-2 rounded border border-slate-200 dark:border-slate-700">
                           <p className="text-xs text-slate-500">{">"} 5 years</p>
-                          <p className="font-medium">{employeeData.filter((e) => e.years_of_service > 5).length}</p>
+                          <p className="font-medium">{yearsOfServiceStats.moreThanFiveYears}</p>
                         </div>
                       </div>
                     </div>

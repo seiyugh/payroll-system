@@ -8,6 +8,7 @@ use Inertia\Inertia;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
+use Carbon\Carbon;
 
 class EmployeeController extends Controller
 {
@@ -46,28 +47,114 @@ class EmployeeController extends Controller
         $query->orderBy($sort, $direction);
         $employees = $query->paginate($perPage);
         
-        // Calculate stats from all employees, not just the paginated ones
+        // Get ALL employees for accurate statistics (not just paginated ones)
         $allEmployees = Employee::all();
+        
+        // Calculate basic stats
+        $totalEmployees = $allEmployees->count();
+        $regularCount = $allEmployees->where('employment_status', 'Regular')->count();
+        $probationaryCount = $allEmployees->where('employment_status', 'Probationary')->count();
+        $maleCount = $allEmployees->where('gender', 'Male')->count();
+        $femaleCount = $allEmployees->where('gender', 'Female')->count();
+        
+        // Calculate department distribution
+        $departmentDistribution = [];
+        $departments = $allEmployees->pluck('department')->unique()->filter()->values();
+        foreach ($departments as $dept) {
+            $count = $allEmployees->where('department', $dept)->count();
+            $departmentDistribution[$dept] = [
+                'count' => $count,
+                'percentage' => $totalEmployees > 0 ? round(($count / $totalEmployees) * 100) : 0
+            ];
+        }
+        
+        // Calculate position distribution
+        $positionDistribution = [];
+        $positions = $allEmployees->pluck('position')->unique()->filter()->values();
+        foreach ($positions as $pos) {
+            $count = $allEmployees->where('position', $pos)->count();
+            $positionDistribution[$pos] = [
+                'count' => $count,
+                'percentage' => $totalEmployees > 0 ? round(($count / $totalEmployees) * 100) : 0
+            ];
+        }
+        
+        // Calculate document completion stats
+        $contractSigned = $allEmployees->where('contract', 'SIGNED')->count();
+        $medicalComplete = $allEmployees->where('medical_cert', true)->count();
+        $governmentIdComplete = $allEmployees->where('government_id', true)->count();
+        $allDocsComplete = $allEmployees->filter(function($e) {
+            return $e->contract === 'SIGNED' && 
+                   $e->medical_cert && 
+                   $e->government_id && 
+                   $e->birth_certificate && 
+                   $e->sss_no && 
+                   $e->tin_no && 
+                   $e->philhealth_no && 
+                   $e->pagibig_no;
+        })->count();
+        
+        // Calculate years of service distribution
+        $lessThanOneYear = $allEmployees->filter(function($e) {
+            return $e->years_of_service < 1;
+        })->count();
+        
+        $oneToTwoYears = $allEmployees->filter(function($e) {
+            return $e->years_of_service >= 1 && $e->years_of_service < 3;
+        })->count();
+        
+        $threeToFiveYears = $allEmployees->filter(function($e) {
+            return $e->years_of_service >= 3 && $e->years_of_service <= 5;
+        })->count();
+        
+        $moreThanFiveYears = $allEmployees->filter(function($e) {
+            return $e->years_of_service > 5;
+        })->count();
+        
+        // Compile all stats
         $stats = [
-            'totalEmployees' => $allEmployees->count(),
-            'regularCount' => $allEmployees->where('employment_status', 'Regular')->count(),
-            'probationaryCount' => $allEmployees->where('employment_status', 'Probationary')->count(),
-            'departmentCount' => $allEmployees->pluck('department')->unique()->count(),
-            'maleCount' => $allEmployees->where('gender', 'Male')->count(),
-            'femaleCount' => $allEmployees->where('gender', 'Female')->count(),
-            'averageAge' => round($allEmployees->avg('age'), 1),
-            'averageYearsOfService' => round($allEmployees->avg('years_of_service'), 1),
-            'totalDailyRate' => $allEmployees->sum('daily_rate')
+            'totalEmployees' => $totalEmployees,
+            'regularCount' => $regularCount,
+            'probationaryCount' => $probationaryCount,
+            'departmentCount' => $departments->count(),
+            'maleCount' => $maleCount,
+            'femaleCount' => $femaleCount,
+            'averageAge' => round($allEmployees->avg('age'), 1) ?: 0,
+            'averageYearsOfService' => round($allEmployees->avg('years_of_service'), 1) ?: 0,
+            'totalDailyRate' => $allEmployees->sum('daily_rate'),
+            // Document completion stats
+            'documentCompletion' => [
+                'contractSigned' => $contractSigned,
+                'contractSignedPercent' => $totalEmployees > 0 ? round(($contractSigned / $totalEmployees) * 100) : 0,
+                'medicalComplete' => $medicalComplete,
+                'medicalCompletePercent' => $totalEmployees > 0 ? round(($medicalComplete / $totalEmployees) * 100) : 0,
+                'governmentIdComplete' => $governmentIdComplete,
+                'governmentIdCompletePercent' => $totalEmployees > 0 ? round(($governmentIdComplete / $totalEmployees) * 100) : 0,
+                'allDocsComplete' => $allDocsComplete,
+                'allDocsCompletePercent' => $totalEmployees > 0 ? round(($allDocsComplete / $totalEmployees) * 100) : 0,
+            ],
+            // Years of service distribution
+            'yearsOfService' => [
+                'lessThanOneYear' => $lessThanOneYear,
+                'oneToTwoYears' => $oneToTwoYears,
+                'threeToFiveYears' => $threeToFiveYears,
+                'moreThanFiveYears' => $moreThanFiveYears
+            ],
+            // Department distribution
+            'departmentDistribution' => $departmentDistribution,
+            // Position distribution
+            'positionDistribution' => $positionDistribution
         ];
         
-        $departments = Employee::select('department')->distinct()->pluck('department');
-        $positions = Employee::select('position')->distinct()->pluck('position');
+        // Get all unique departments and positions for filters
+        $departmentsList = Employee::select('department')->distinct()->whereNotNull('department')->pluck('department');
+        $positionsList = Employee::select('position')->distinct()->whereNotNull('position')->pluck('position');
         
         return Inertia::render('Employees/Index', [
             'employees' => $employees,
             'stats' => $stats,
-            'departments' => $departments,
-            'positions' => $positions,
+            'departments' => $departmentsList,
+            'positions' => $positionsList,
             'filters' => $request->only(['search', 'position', 'department', 'status'])
         ]);
     }
@@ -119,7 +206,10 @@ class EmployeeController extends Controller
         }
 
         $data = $request->all();
-        $data['years_of_service'] = now()->diffInYears($data['date_hired']);
+        
+        // Calculate years of service based on date_hired
+        $dateHired = Carbon::parse($data['date_hired']);
+        $data['years_of_service'] = $dateHired->diffInYears(Carbon::now());
 
         // Map form field names to database field names
         $fieldMappings = [
@@ -220,16 +310,14 @@ class EmployeeController extends Controller
         
         // Always recalculate years_of_service based on date_hired
         if (isset($data['date_hired'])) {
-            $hireDate = new \DateTime($data['date_hired']);
-            $now = new \DateTime();
-            $interval = $hireDate->diff($now);
-            $data['years_of_service'] = $interval->y;
+            $hireDate = Carbon::parse($data['date_hired']);
+            $now = Carbon::now();
+            $data['years_of_service'] = $hireDate->diffInYears($now);
         } else {
             // If no date_hired is provided, use the existing one
-            $hireDate = new \DateTime($employee->date_hired);
-            $now = new \DateTime();
-            $interval = $hireDate->diff($now);
-            $data['years_of_service'] = $interval->y;
+            $hireDate = Carbon::parse($employee->date_hired);
+            $now = Carbon::now();
+            $data['years_of_service'] = $hireDate->diffInYears($now);
         }
         
         Log::info('Years of service calculated', [
@@ -323,6 +411,13 @@ class EmployeeController extends Controller
                 continue;
             }
 
+            // Calculate years of service if date_hired is provided
+            $yearsOfService = 0;
+            if (!empty($employeeData['date_hired'])) {
+                $dateHired = Carbon::parse($employeeData['date_hired']);
+                $yearsOfService = $dateHired->diffInYears(Carbon::now());
+            }
+
             // Map CSV fields to database fields
             $mappedData = [
                 'employee_number' => $employeeData['employee_number'] ?? '',
@@ -342,7 +437,7 @@ class EmployeeController extends Controller
                 'birth_place' => $employeeData['birthplace'] ?? $employeeData['birth_place'] ?? null,
                 'contacts' => $employeeData['contacts'] ?? '',
                 'date_hired' => $employeeData['date_hired'] ?? now()->format('Y-m-d'),
-                'years_of_service' => $employeeData['years_of_service'] ?? 0,
+                'years_of_service' => $employeeData['years_of_service'] ?? $yearsOfService,
                 'employment_status' => $employeeData['employment_status'] ?? 'Probationary',
                 'daily_rate' => $employeeData['daily_rate'] ?? 0,
                 'date_terminated_resigned' => $employeeData['date_terminated_resigned'] ?? $employeeData['resignation_termination_date'] ?? null,
