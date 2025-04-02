@@ -25,6 +25,7 @@ import {
   X,
   Clock,
   DollarSign,
+  Pencil
 } from "lucide-react"
 import AddPayrollModal from "./AddPayrollModal"
 import UpdatePayrollModal from "./UpdatePayrollModal"
@@ -268,6 +269,8 @@ const PayrollIndex = ({
     }
   }
 
+
+  
   // Update the openAddModal function to include validation
   const openAddModal = () => {
     // Check if there are any payroll periods before opening the modal
@@ -281,9 +284,9 @@ const PayrollIndex = ({
   const closeAddModal = () => setIsAddModalOpen(false)
 
   const openUpdateModal = (payroll: PayrollEntry) => {
-    setSelectedPayroll(payroll)
-    setIsUpdateModalOpen(true)
-  }
+    setIsUpdateModalOpen(true);
+    setSelectedPayroll(payroll);
+  };
   const closeUpdateModal = () => {
     setSelectedPayroll(null)
     setIsUpdateModalOpen(false)
@@ -1556,11 +1559,27 @@ const PayrollIndex = ({
                                 </DropdownMenuContent>
                               </DropdownMenu>
                             </td>
-                            <td className="py-3 px-2 flex space-x-1">
+                            <td className="py-3 px-2 flex space-x-1 flex-row">
+                            <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button
+                                      variant="outline"
+                                      size="icon"
+                                      className="h-7 w-7 border-orange-200 text-orange-600 hover:border-orange-300 dark:border-orange-800 dark:text-orange-400 dark:hover:border-orange-700"
+                                      onClick={() => openUpdateModal(payroll)}
+                                    >
+                                      <Pencil className="h-3.5 w-3.5" />
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent>Update Payslip</TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
                               <TooltipProvider>
                                 <Tooltip>
                                   <TooltipTrigger asChild>
                                     <div className="relative">
+                                   
                                       <Button
                                         variant="outline"
                                         size="icon"
@@ -1574,7 +1593,7 @@ const PayrollIndex = ({
                                   <TooltipContent>
                                     <div className="text-xs">
                                       Print Payslip
-                                      <div className="text-gray-500">(Click refresh icon to regenerate)</div>
+                                     
                                     </div>
                                   </TooltipContent>
                                 </Tooltip>

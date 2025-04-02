@@ -1,24 +1,33 @@
 "use client"
 
-import { useState, useEffect } from "react"
 import { Link, usePage } from "@inertiajs/react"
-import { LogOut, Moon, Sun, Menu, Home, Users, FileText, Calendar, StickyNote } from "lucide-react" // Added StickyNote icon
+import { LogOut, Moon, Sun, Menu, Home, Users, FileText, Calendar, UserCog } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { useForm } from "@inertiajs/react"
 import { toast } from "sonner"
 
-const Sidebar = ({ isOpen, toggleSidebar }) => {
+export default function Sidebar({ isOpen, toggleSidebar }) {
   const { post } = useForm()
   const { url } = usePage() // Access current URL from Inertia
 
   // Helper function to check if the link is active
   const isActive = (path) => url.startsWith(path)
 
+  // For debugging - remove in production
+  console.log("Current URL:", url)
+  console.log("Sidebar links:", [
+    { path: "/dashboard", active: isActive("/dashboard") },
+    { path: "/employees", active: isActive("/employees") },
+    { path: "/payroll", active: isActive("/payroll") },
+    { path: "/attendance", active: isActive("/attendance") },
+    { path: "/users", active: isActive("/users") },
+  ])
+
   return (
     <aside
       className={cn(
-        "fixed left-0 top-0 h-full bg-white text-black dark:bg-black dark:text-white transition-all duration-300 z-10",
+        "fixed left-0 top-0 h-full bg-white text-black dark:bg-black dark:text-white transition-all duration-300 z-50",
         isOpen ? "w-60" : "w-20",
       )}
     >
@@ -72,7 +81,18 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
           <Calendar className="w-6 h-6 min-w-6" />
           {isOpen && <span className="ml-3">Attendance</span>}
         </Link>
-        
+
+        {/* Users Management Link - with debugging border */}
+        <Link
+          href="/users"
+          className={cn(
+            "flex items-center px-3 py-2 rounded transition-colors duration-200 hover:bg-black dark:hover:bg-white hover:text-white dark:hover:text-black",
+            isActive("/users") && "bg-black text-white dark:bg-white dark:text-black",
+          )}
+        >
+          <UserCog className="w-6 h-6 min-w-6" />
+          {isOpen && <span className="ml-3">Users</span>}
+        </Link>
       </nav>
 
       {/* Dark Mode and Logout Buttons */}
@@ -117,38 +137,6 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
         </Button>
       </div>
     </aside>
-  )
-}
-
-export default function AppLayoutTemplate({ children }) {
-  const [isOpen, setIsOpen] = useState(localStorage.getItem("sidebarState") === "open" ? true : false) // Persist state
-
-  useEffect(() => {
-    const theme = localStorage.getItem("theme")
-    document.documentElement.classList.toggle("dark", theme === "dark")
-  }, [])
-
-  const toggleSidebar = () => {
-    setIsOpen((prevState) => {
-      const newState = !prevState
-      localStorage.setItem("sidebarState", newState ? "open" : "closed") // Persist sidebar state
-      return newState
-    })
-  }
-
-  return (
-    <div className="flex">
-      <Sidebar isOpen={isOpen} toggleSidebar={toggleSidebar} />
-
-      <main
-        className={cn(
-          "flex-1 min-h-screen bg-white dark:bg-black text-black dark:text-white transition-all duration-300",
-          isOpen ? "ml-60" : "ml-20",
-        )}
-      >
-        {children}
-      </main>
-    </div>
   )
 }
 

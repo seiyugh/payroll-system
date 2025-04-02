@@ -10,6 +10,9 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { AlertCircle } from "lucide-react"
 import {
   Pagination,
   PaginationContent,
@@ -60,6 +63,8 @@ const PayrollPeriodsTab = ({ periods = [], onPeriodSelect, onTabChange }: Payrol
     description: "",
   })
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null)
+  const [existingPeriodWarning, setExistingPeriodWarning] = useState(false)
+  const [overwriteExisting, setOverwriteExisting] = useState(false)
 
   // Calculate period end and payment date based on start date
   const handlePeriodStartChange = (e) => {
@@ -78,13 +83,32 @@ const PayrollPeriodsTab = ({ periods = [], onPeriodSelect, onTabChange }: Payrol
     const weekNumber = getWeekNumber(startDate)
     const weekId = Number.parseInt(`${year}${weekNumber.toString().padStart(2, "0")}`)
 
-    setPeriodFormData({
+    const newFormData = {
       ...periodFormData,
       week_id: weekId,
       period_start: e.target.value,
       period_end: endDate.toISOString().split("T")[0],
       payment_date: paymentDate.toISOString().split("T")[0],
-    })
+    }
+
+    setPeriodFormData(newFormData)
+
+    // Check if a period with this week_id already exists
+    checkExistingPeriod(weekId)
+  }
+
+  // Check if a period with the given week_id already exists
+  const checkExistingPeriod = (weekId: number) => {
+    const existingPeriod = periods.find(
+      (period) => period.week_id === weekId && (!editingPeriod || period.id !== editingPeriod.id),
+    )
+
+    if (existingPeriod) {
+      setExistingPeriodWarning(true)
+    } else {
+      setExistingPeriodWarning(false)
+      setOverwriteExisting(false)
+    }
   }
 
   // Helper function to get week number
@@ -142,6 +166,13 @@ const PayrollPeriodsTab = ({ periods = [], onPeriodSelect, onTabChange }: Payrol
     setCurrentPage(1)
   }, [searchTerm, statusFilter])
 
+  // Handle week_id change to check for existing periods
+  const handleWeekIdChange = (e) => {
+    const weekId = Number.parseInt(e.target.value)
+    setPeriodFormData({ ...periodFormData, week_id: weekId })
+    checkExistingPeriod(weekId)
+  }
+
   // Handle create/update period
   const handleSubmitPeriod = (e) => {
     e.preventDefault()
@@ -154,6 +185,7 @@ const PayrollPeriodsTab = ({ periods = [], onPeriodSelect, onTabChange }: Payrol
       payment_date: periodFormData.payment_date,
       status: periodFormData.status,
       description: periodFormData.description || "",
+      overwrite_existing: overwriteExisting,
     }
 
     console.log("Submitting period data:", formData)
@@ -166,13 +198,23 @@ const PayrollPeriodsTab = ({ periods = [], onPeriodSelect, onTabChange }: Payrol
           setIsEditModalOpen(false)
           setEditingPeriod(null)
           setIsLoading(false)
+          setExistingPeriodWarning(false)
+          setOverwriteExisting(false)
           router.reload() // Use reload instead of custom refreshData
         },
         onError: (errors) => {
           console.error("Update period error:", errors)
-          Object.entries(errors).forEach(([field, message]) => {
-            toast.error(`${field}: ${message}`)
-          })
+
+          // Check if the error is about an existing period
+          if (errors.week_id && typeof errors.week_id === "string" && errors.week_id.includes("already exists")) {
+            setExistingPeriodWarning(true)
+            toast.error("A period with this Week ID already exists. Check the overwrite option to replace it.")
+          } else {
+            Object.entries(errors).forEach(([field, message]) => {
+              toast.error(`${field}: ${message}`)
+            })
+          }
+
           setIsLoading(false)
         },
       })
@@ -183,13 +225,23 @@ const PayrollPeriodsTab = ({ periods = [], onPeriodSelect, onTabChange }: Payrol
           toast.success("Payroll period created successfully!")
           setIsNewPeriodModalOpen(false)
           setIsLoading(false)
+          setExistingPeriodWarning(false)
+          setOverwriteExisting(false)
           router.reload() // Use reload instead of custom refreshData
         },
         onError: (errors) => {
           console.error("Create period error:", errors)
-          Object.entries(errors).forEach(([field, message]) => {
-            toast.error(`${field}: ${message}`)
-          })
+
+          // Check if the error is about an existing period
+          if (errors.week_id && typeof errors.week_id === "string" && errors.week_id.includes("already exists")) {
+            setExistingPeriodWarning(true)
+            toast.error("A period with this Week ID already exists. Check the overwrite option to replace it.")
+          } else {
+            Object.entries(errors).forEach(([field, message]) => {
+              toast.error(`${field}: ${message}`)
+            })
+          }
+
           setIsLoading(false)
         },
       })
@@ -208,6 +260,8 @@ const PayrollPeriodsTab = ({ periods = [], onPeriodSelect, onTabChange }: Payrol
       description: period.description || "",
     })
     setIsEditModalOpen(true)
+    setExistingPeriodWarning(false)
+    setOverwriteExisting(false)
   }
 
   // Handle delete period
@@ -630,7 +684,7 @@ const PayrollPeriodsTab = ({ periods = [], onPeriodSelect, onTabChange }: Payrol
                     required
                     min="1"
                     value={periodFormData.week_id}
-                    onChange={(e) => setPeriodFormData({ ...periodFormData, week_id: Number.parseInt(e.target.value) })}
+                    onChange={handleWeekIdChange}
                     className="bg-slate-50 dark:bg-slate-800"
                   />
                 </div>
@@ -659,13 +713,44 @@ const PayrollPeriodsTab = ({ periods = [], onPeriodSelect, onTabChange }: Payrol
                     onChange={(e) => setPeriodFormData({ ...periodFormData, description: e.target.value })}
                   />
                 </div>
+
+                {/* Existing Period Warning */}
+                {existingPeriodWarning && (
+                  <div className="col-span-2">
+                    <Alert
+                      variant="destructive"
+                      className="bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-800"
+                    >
+                      <AlertCircle className="h-4 w-4" />
+                      <AlertTitle>Warning</AlertTitle>
+                      <AlertDescription>
+                        A payroll period with Week ID {periodFormData.week_id} already exists. Creating a new period
+                        with this ID will overwrite the existing one.
+                      </AlertDescription>
+                    </Alert>
+
+                    <div className="flex items-center space-x-2 mt-2">
+                      <Checkbox
+                        id="overwrite"
+                        checked={overwriteExisting}
+                        onCheckedChange={(checked) => setOverwriteExisting(checked as boolean)}
+                      />
+                      <label
+                        htmlFor="overwrite"
+                        className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                      >
+                        I understand and want to overwrite the existing period
+                      </label>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setIsNewPeriodModalOpen(false)}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={isLoading}>
+              <Button type="submit" disabled={isLoading || (existingPeriodWarning && !overwriteExisting)}>
                 {isLoading ? "Creating..." : "Create Period"}
               </Button>
             </DialogFooter>
@@ -720,7 +805,7 @@ const PayrollPeriodsTab = ({ periods = [], onPeriodSelect, onTabChange }: Payrol
                     required
                     min="1"
                     value={periodFormData.week_id}
-                    onChange={(e) => setPeriodFormData({ ...periodFormData, week_id: Number.parseInt(e.target.value) })}
+                    onChange={handleWeekIdChange}
                   />
                 </div>
                 <div>
@@ -748,13 +833,44 @@ const PayrollPeriodsTab = ({ periods = [], onPeriodSelect, onTabChange }: Payrol
                     onChange={(e) => setPeriodFormData({ ...periodFormData, description: e.target.value })}
                   />
                 </div>
+
+                {/* Existing Period Warning (for edit mode) */}
+                {existingPeriodWarning && (
+                  <div className="col-span-2">
+                    <Alert
+                      variant="destructive"
+                      className="bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-800"
+                    >
+                      <AlertCircle className="h-4 w-4" />
+                      <AlertTitle>Warning</AlertTitle>
+                      <AlertDescription>
+                        Another payroll period with Week ID {periodFormData.week_id} already exists. Saving with this ID
+                        will overwrite the existing one.
+                      </AlertDescription>
+                    </Alert>
+
+                    <div className="flex items-center space-x-2 mt-2">
+                      <Checkbox
+                        id="overwrite_edit"
+                        checked={overwriteExisting}
+                        onCheckedChange={(checked) => setOverwriteExisting(checked as boolean)}
+                      />
+                      <label
+                        htmlFor="overwrite_edit"
+                        className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                      >
+                        I understand and want to overwrite the existing period
+                      </label>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setIsEditModalOpen(false)}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={isLoading}>
+              <Button type="submit" disabled={isLoading || (existingPeriodWarning && !overwriteExisting)}>
                 {isLoading ? "Updating..." : "Update Period"}
               </Button>
             </DialogFooter>

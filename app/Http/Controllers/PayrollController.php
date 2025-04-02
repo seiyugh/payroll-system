@@ -16,6 +16,7 @@ use Barryvdh\DomPDF\Facade\Pdf;
 use Throwable;
 use App\Http\Controllers\Controller;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Validation\Rule;
 
 class PayrollController extends Controller {
   // Basic CRUD Operations
@@ -231,24 +232,6 @@ class PayrollController extends Controller {
 
           // Create a new PayrollEntry instance and set its properties
           $payroll = new PayrollEntry();
-          foreach ($validated as $key => $value) {
-              $payroll->$key = $value;
-          }
-          
-          // Log the data before creation
-          Log::info('Creating payroll entry with validated data:', [
-              'validated_data' => $validated
-          ]);
-
-          Log::info('About to create PayrollEntry with data:', [
-              'employee_number' => $validated['employee_number'],
-              'week_id' => $validated['week_id'],
-              'gross_pay' => $validated['gross_pay'],
-              'status' => $validated['status']
-          ]);
-
-          // Create a new PayrollEntry instance and set its properties
-          $payroll = new PayrollEntry();
           
           // Only set non-generated columns
           $payroll->employee_number = $validated['employee_number'];
@@ -402,7 +385,7 @@ class PayrollController extends Controller {
               $validated['short'] = 0; // Force to 0 for non-Allen One employees
           }
   
-          // Calculate derived fields
+          // Calculate total deductions correctly
           $totalDeductions = $validated['sss_deduction'] +
                             $validated['philhealth_deduction'] +
                             $validated['pagibig_deduction'] +
@@ -413,9 +396,7 @@ class PayrollController extends Controller {
                             $validated['other_deductions'] +
                             $validated['short'];
   
-          // Remove net_pay from validated data since it's a generated column
-          unset($validated['net_pay']);
-          
+          // Set the total_deductions field
           $validated['total_deductions'] = $totalDeductions;
           
           // Log the data before update
@@ -425,26 +406,25 @@ class PayrollController extends Controller {
               'original_data' => $payroll->toArray()
           ]);
   
-          // Update payroll fields - EXCLUDE net_pay since it's generated
+          // Update payroll fields
           $payroll->fill([
-              'employee_number' => $validated['employee_number'],
-              'week_id' => $validated['week_id'],
-              'daily_rate' => $validated['daily_rate'],
-              'gross_pay' => $validated['gross_pay'],
-              'sss_deduction' => $validated['sss_deduction'],
-              'philhealth_deduction' => $validated['philhealth_deduction'],
-              'pagibig_deduction' => $validated['pagibig_deduction'],
-              'tax_deduction' => $validated['tax_deduction'],
-              'cash_advance' => $validated['cash_advance'],
-              'loan' => $validated['loan'],
-              'vat' => $validated['vat'],
-              'other_deductions' => $validated['other_deductions'],
-              'short' => $validated['short'],
-              'ytd_earnings' => $validated['ytd_earnings'],
-              'thirteenth_month_pay' => $validated['thirteenth_month_pay'],
-              'total_deductions' => $validated['total_deductions'],
-              'status' => $validated['status'] ?? $payroll->status,
-          ]);
+            'employee_number' => $validated['employee_number'],
+            'week_id' => $validated['week_id'],
+            'daily_rate' => $validated['daily_rate'],
+            'gross_pay' => $validated['gross_pay'],
+            'sss_deduction' => $validated['sss_deduction'],
+            'philhealth_deduction' => $validated['philhealth_deduction'],
+            'pagibig_deduction' => $validated['pagibig_deduction'],
+            'tax_deduction' => $validated['tax_deduction'],
+            'cash_advance' => $validated['cash_advance'],
+            'loan' => $validated['loan'],
+            'vat' => $validated['vat'],
+            'other_deductions' => $validated['other_deductions'],
+            'short' => $validated['short'],
+            'ytd_earnings' => $validated['ytd_earnings'],
+            'thirteenth_month_pay' => $validated['thirteenth_month_pay'],
+            'status' => $validated['status'] ?? $payroll->status,
+        ]);
           
           // Update employee details if provided
           $employeeUpdates = [];
@@ -464,7 +444,7 @@ class PayrollController extends Controller {
           }
           
           // Update gross pay based on attendance if needed
-          if ($request->input('update_gross_pay', true)) {
+          if ($request->input('update_gross_pay', false)) {
               $grossPayResult = $this->updateGrossPayFromAttendance($id);
               if ($grossPayResult['success']) {
                   $payroll->gross_pay = $grossPayResult['payroll']->gross_pay;
@@ -507,10 +487,9 @@ class PayrollController extends Controller {
       }
   }
 
-
   // FIXED: Enhanced generatePayroll method with better error handling and debugging
   public function generatePayroll(Request $request)
-{
+  {
     try {
         // Validate the request
         $request->validate([
@@ -727,7 +706,7 @@ class PayrollController extends Controller {
         
         return redirect()->back()->with('error', 'Payroll generation failed: ' . $e->getMessage());
     }
-}
+  }
 
   public function listPeriods(Request $request)
   {
@@ -798,7 +777,7 @@ class PayrollController extends Controller {
   }
 
   public function generateFromAttendance(Request $request)
-{
+  {
     try {
         Log::info('Generating payroll from attendance with request data:', $request->all());
         
@@ -943,21 +922,54 @@ class PayrollController extends Controller {
         Log::error('Stack trace: ' . $e->getTraceAsString());
         return redirect()->back()->with('error', 'Failed to generate payroll: ' . $e->getMessage());
     }
-}
+  }
 
   // Payroll Period Management
   public function createPeriod(Request $request)
-{
+  {
       DB::beginTransaction();
       
       try {
+          // Check if overwrite_existing flag is set
+          $overwriteExisting = $request->input('overwrite_existing', false);
+          
+          // Validate the request data
           $validated = $request->validate([
-              'week_id' => 'required|integer',
+              'week_id' => [
+                  'required',
+                  'integer',
+                  // Only apply unique rule if not overwriting
+                  function ($attribute, $value, $fail) use ($overwriteExisting) {
+                      if (!$overwriteExisting) {
+                          $exists = PayrollPeriod::where('week_id', $value)->exists();
+                          if ($exists) {
+                              $fail('A payroll period with this week ID already exists.');
+                          }
+                      }
+                  }
+              ],
               'period_start' => 'required|date',
               'period_end' => 'required|date|after_or_equal:period_start',
               'payment_date' => 'required|date|after_or_equal:period_end',
               'status' => 'required|string',
           ]);
+
+          // If overwriting, delete existing period with the same week_id
+          if ($overwriteExisting) {
+              $existingPeriod = PayrollPeriod::where('week_id', $validated['week_id'])->first();
+              if ($existingPeriod) {
+                  Log::info('Overwriting existing payroll period with week_id: ' . $validated['week_id']);
+                  
+                  // Check if there are any payroll entries associated with this period
+                  $hasEntries = PayrollEntry::where('week_id', $validated['week_id'])->exists();
+                  if ($hasEntries) {
+                      Log::info('Deleting associated payroll entries for week_id: ' . $validated['week_id']);
+                      PayrollEntry::where('week_id', $validated['week_id'])->delete();
+                  }
+                  
+                  $existingPeriod->delete();
+              }
+          }
 
           // Create the payroll period with all required fields
           $payrollPeriod = PayrollPeriod::create([
@@ -1000,16 +1012,61 @@ class PayrollController extends Controller {
       DB::beginTransaction();
 
       try {
+          // Get the current period
+          $payrollPeriod = PayrollPeriod::findOrFail($id);
+          
+          // Check if overwrite_existing flag is set
+          $overwriteExisting = $request->input('overwrite_existing', false);
+          
+          // Validate the request data
           $validated = $request->validate([
-              'week_id' => 'required|integer',
+              'week_id' => [
+                  'required',
+                  'integer',
+                  // Only apply unique rule if week_id is changing and not overwriting
+                  function ($attribute, $value, $fail) use ($payrollPeriod, $overwriteExisting) {
+                      if ($value != $payrollPeriod->week_id && !$overwriteExisting) {
+                          $exists = PayrollPeriod::where('week_id', $value)
+                              ->where('id', '!=', $payrollPeriod->id)
+                              ->exists();
+                          if ($exists) {
+                              $fail('A payroll period with this week ID already exists.');
+                          }
+                      }
+                  }
+              ],
               'period_start' => 'required|date',
               'period_end' => 'required|date|after_or_equal:period_start',
               'payment_date' => 'required|date|after_or_equal:period_end',
               'status' => 'required|string',
           ]);
 
-          // Find the payroll period by ID
-          $payrollPeriod = PayrollPeriod::findOrFail($id);
+          // If week_id is changing and overwriting is enabled, handle the conflict
+          if ($validated['week_id'] != $payrollPeriod->week_id && $overwriteExisting) {
+              $existingPeriod = PayrollPeriod::where('week_id', $validated['week_id'])
+                  ->where('id', '!=', $payrollPeriod->id)
+                  ->first();
+                  
+              if ($existingPeriod) {
+                  Log::info('Overwriting existing payroll period with week_id: ' . $validated['week_id']);
+                  
+                  // Check if there are any payroll entries associated with the conflicting period
+                  $hasEntries = PayrollEntry::where('week_id', $validated['week_id'])->exists();
+                  if ($hasEntries) {
+                      Log::info('Deleting associated payroll entries for week_id: ' . $validated['week_id']);
+                      PayrollEntry::where('week_id', $validated['week_id'])->delete();
+                  }
+                  
+                  $existingPeriod->delete();
+              }
+              
+              // Update payroll entries associated with the old week_id
+              if (PayrollEntry::where('week_id', $payrollPeriod->week_id)->exists()) {
+                  Log::info('Updating associated payroll entries from week_id ' . $payrollPeriod->week_id . ' to ' . $validated['week_id']);
+                  PayrollEntry::where('week_id', $payrollPeriod->week_id)
+                      ->update(['week_id' => $validated['week_id']]);
+              }
+          }
           
           // Log the data being updated for debugging
           Log::info('Updating payroll period', [
@@ -1337,9 +1394,9 @@ class PayrollController extends Controller {
         $msc = ceil($monthlyRate / 500) * 500;
         return ($msc * 0.05) / 4; // Convert back to weekly
     }
-}
+  }
 
-public function calculatePhilhealth($grossPay) {
+  public function calculatePhilhealth($grossPay) {
     // Convert weekly gross pay to monthly for calculation
     $monthlyRate = $grossPay * 4;
     
@@ -1351,19 +1408,17 @@ public function calculatePhilhealth($grossPay) {
     } else {
         return ($monthlyRate * 0.025) / 4; // Convert back to weekly
     }
-}
+  }
 
-
-public function calculatePagibig($grossPay) {
+  public function calculatePagibig($grossPay) {
     // Convert weekly gross pay to monthly for calculation
     $monthlyRate = $grossPay * 4;
     
     // Calculate Pag-IBIG based on 2025 rates (2% with max of ₱200)
     return (min($monthlyRate * 0.02, 200)) / 4; // Convert back to weekly
-}
+  }
 
-  
-public function calculateTax($grossPay) {
+  public function calculateTax($grossPay) {
     // Convert weekly gross pay to monthly and annual
     $monthlyRate = $grossPay * 4;
     $annualRate = $monthlyRate * 12;
@@ -1395,10 +1450,10 @@ public function calculateTax($grossPay) {
     
     // Convert annual tax to weekly
     return $tax / 52;
-}
+  }
 
-public function updateGrossPayFromAttendance($payrollEntryId)
-{
+  public function updateGrossPayFromAttendance($payrollEntryId)
+  {
     try {
         DB::beginTransaction();
         
@@ -1445,10 +1500,27 @@ public function updateGrossPayFromAttendance($payrollEntryId)
         
         // Update the payroll entry
         $payroll->gross_pay = $grossPay;
-        $payroll->save();
         
-        // Recalculate deductions and net pay
-        // Note: net_pay is a generated column, so it will be updated automatically
+        // Recalculate deductions
+        $payroll->sss_deduction = $this->calculateSSS($grossPay);
+        $payroll->philhealth_deduction = $this->calculatePhilhealth($grossPay);
+        $payroll->pagibig_deduction = $this->calculatePagibig($grossPay);
+        $payroll->tax_deduction = $this->calculateTax($grossPay);
+        
+        // Recalculate total deductions
+        $totalDeductions = $payroll->sss_deduction +
+                          $payroll->philhealth_deduction +
+                          $payroll->pagibig_deduction +
+                          $payroll->tax_deduction +
+                          $payroll->cash_advance +
+                          $payroll->loan +
+                          $payroll->vat +
+                          $payroll->other_deductions +
+                          $payroll->short;
+                          
+        $payroll->total_deductions = $totalDeductions;
+        
+        $payroll->save();
         
         DB::commit();
         
@@ -1466,10 +1538,10 @@ public function updateGrossPayFromAttendance($payrollEntryId)
             'message' => 'Failed to update gross pay: ' . $e->getMessage()
         ];
     }
-}
+  }
 
-public function recalculateGrossPay(Request $request, $id)
-{
+  public function recalculateGrossPay(Request $request, $id)
+  {
     $result = $this->updateGrossPayFromAttendance($id);
     
     if ($request->wantsJson()) {
@@ -1481,5 +1553,6 @@ public function recalculateGrossPay(Request $request, $id)
     } else {
         return redirect()->back()->with('error', $result['message']);
     }
+  }
 }
-}
+

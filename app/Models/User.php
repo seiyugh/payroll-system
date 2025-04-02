@@ -26,15 +26,25 @@ class User extends Authenticatable
     ];
 
     protected $casts = [
-        'password_hash' => 'string',
+        'password_hash' => 'hashed',
+        'is_active' => 'boolean',
+        'last_login' => 'datetime',
     ];
+
+    /**
+     * Get the password for the user.
+     */
+    public function getAuthPassword()
+    {
+        return $this->password_hash;
+    }
 
     /**
      * Define the one-to-one relationship with the Employee model.
      */
-public function employee()
-{
-    return $this->hasOne(Employee::class);
+    public function employee()
+    {
+        return $this->hasOne(Employee::class);
+    }
 }
 
-}

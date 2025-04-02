@@ -15,7 +15,7 @@ class DatabaseSeeder extends Seeder
     public function run()
     {
         // Create 100 employees
-        $employees = Employee::factory()->count(5)->create();
+        $employees = Employee::factory()->count(100)->create();
         
         // Create users for each employee
         foreach ($employees as $employee) {

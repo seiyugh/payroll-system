@@ -37,6 +37,15 @@ Route::middleware(['auth', 'verified'])->group(function () {
         return Inertia::render('Notes/Index');
     })->name('notes.index');
 
+
+    Route::middleware(['auth'])->group(function () {
+        // User management routes
+        Route::get('/users', [UserController::class, 'index'])->name('users.index');
+        Route::post('/users', [UserController::class, 'store'])->name('users.store');
+        Route::put('/users/{user}', [UserController::class, 'update'])->name('users.update');
+        Route::delete('/users/{user}', [UserController::class, 'destroy'])->name('users.destroy');
+    });
+    
     // Profile routes
     Route::prefix('profile')->group(function () {
         Route::get('/', [ProfileController::class, 'edit'])->name('profile.edit');

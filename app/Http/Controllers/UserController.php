@@ -18,7 +18,7 @@ class UserController extends Controller
     {
         $users = User::all();
 
-        return Inertia::render('Settings/Users', [
+        return Inertia::render('Users/Index', [
             'users' => $users
         ]);
     }
@@ -40,8 +40,9 @@ class UserController extends Controller
             'full_name' => $request->full_name,
             'username' => $request->username,
             'employee_number' => $request->employee_number,
-            'password_hash' => Hash::make($request->password), // ✅ Hashing correctly
+            'password_hash' => Hash::make($request->password),
             'user_type' => $request->user_type,
+            'is_active' => true, // Default to active
         ]);
 
         return redirect()->back()->with('success', 'User created successfully');
@@ -56,14 +57,16 @@ class UserController extends Controller
             'full_name' => 'required|string|max:255',
             'username' => 'required|string|max:255|unique:users,username,' . $user->id,
             'user_type' => 'required|string|in:admin,user',
+            'is_active' => 'boolean',
         ]);
 
-        // Prevent updating employee_number to maintain data integrity
-        $user->update([
+        // Update user data
+        $userData = [
             'full_name' => $request->full_name,
             'username' => $request->username,
             'user_type' => $request->user_type,
-        ]);
+            'is_active' => $request->is_active,
+        ];
 
         // If password is provided, update it
         if ($request->filled('password')) {
@@ -71,10 +74,10 @@ class UserController extends Controller
                 'password' => ['required', 'confirmed', Rules\Password::defaults()],
             ]);
 
-            $user->update([
-                'password_hash' => Hash::make($request->password),
-            ]);
+            $userData['password_hash'] = Hash::make($request->password);
         }
+
+        $user->update($userData);
 
         return redirect()->back()->with('success', 'User updated successfully');
     }
@@ -89,8 +92,14 @@ class UserController extends Controller
             return redirect()->back()->with('error', 'You cannot delete your own account');
         }
 
+        // Check if user is associated with an employee
+        if ($user->employee) {
+            return redirect()->back()->with('error', 'Cannot delete user associated with an employee');
+        }
+
         $user->delete();
 
         return redirect()->back()->with('success', 'User deleted successfully');
     }
 }
+
